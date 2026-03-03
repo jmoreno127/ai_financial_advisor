@@ -4,6 +4,7 @@ import argparse
 import socket
 from datetime import datetime, timezone
 from typing import Dict, List
+from uuid import uuid4
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -226,12 +227,32 @@ def chat_command(config: AppConfig, question: str | None) -> int:
         return 1
 
     history: List[Dict[str, str]] = []
+    conversation_id = str(uuid4())
+    turn_index = 0
 
     def _ask(user_question: str) -> None:
+        nonlocal turn_index
         answer, model_used = ai.answer_follow_up(user_question, latest, history)
         print(f"advisor ({model_used})> {answer}")
         history.append({"role": "user", "content": user_question})
         history.append({"role": "assistant", "content": answer})
+        turn_index += 1
+        try:
+            store.write_followup_turn(
+                conversation_id=conversation_id,
+                turn_index=turn_index,
+                model_used=model_used,
+                user_question=user_question,
+                assistant_answer=answer,
+                account_id=latest.get("account_id"),
+                decision_cycle_ts=latest.get("cycle_ts"),
+                context_payload={
+                    "latest_recommendation": latest.get("recommendation_payload"),
+                    "latest_request": latest.get("request_payload"),
+                },
+            )
+        except Exception as exc:
+            logger.error("Failed to persist follow-up chat turn", error=str(exc), conversation_id=conversation_id)
         logger.info("Follow-up chat turn", model_used=model_used, question=user_question, answer=answer)
 
     if question:
@@ -239,6 +260,7 @@ def chat_command(config: AppConfig, question: str | None) -> int:
         return 0
 
     print("Follow-up chat started. Type your question and press Enter. Type `exit` to quit.")
+    print(f"Conversation ID: {conversation_id}")
     print(f"Loaded latest recommendation from cycle: {latest.get('cycle_ts')}")
     while True:
         try:

@@ -45,6 +45,8 @@ Examples:
   - Single turn: `advisor chat --question "Should I add Gold exposure?"`
   - Interactive: `advisor chat`
 
+Follow-up turns are persisted in PostgreSQL table `ai_followup_turns`.
+
 `advisor once` and `advisor run` now wait up to 60 seconds for initial IBKR account/position data and emit connectivity progress every 10 seconds in `logs/decisions.jsonl`.
 
 ## Safety

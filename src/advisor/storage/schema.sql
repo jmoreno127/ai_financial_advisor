@@ -57,3 +57,17 @@ CREATE TABLE IF NOT EXISTS service_heartbeats (
     details JSONB NOT NULL DEFAULT '{}'::jsonb,
     heartbeat_ts TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS ai_followup_turns (
+    id BIGSERIAL PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    turn_index INTEGER NOT NULL,
+    account_id TEXT,
+    decision_cycle_ts TIMESTAMPTZ,
+    model_used TEXT NOT NULL,
+    user_question TEXT NOT NULL,
+    assistant_answer TEXT NOT NULL,
+    context_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (conversation_id, turn_index)
+);

@@ -195,6 +195,61 @@ class PostgresStore:
                 "raw_response": row["raw_response"],
             }
 
+    def write_followup_turn(
+        self,
+        conversation_id: str,
+        turn_index: int,
+        model_used: str,
+        user_question: str,
+        assistant_answer: str,
+        account_id: Optional[str] = None,
+        decision_cycle_ts: Optional[str] = None,
+        context_payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.init_schema()
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO ai_followup_turns (
+                        conversation_id,
+                        turn_index,
+                        account_id,
+                        decision_cycle_ts,
+                        model_used,
+                        user_question,
+                        assistant_answer,
+                        context_payload
+                    ) VALUES (
+                        :conversation_id,
+                        :turn_index,
+                        :account_id,
+                        :decision_cycle_ts,
+                        :model_used,
+                        :user_question,
+                        :assistant_answer,
+                        CAST(:context_payload AS JSONB)
+                    )
+                    ON CONFLICT (conversation_id, turn_index)
+                    DO UPDATE SET
+                        model_used = EXCLUDED.model_used,
+                        user_question = EXCLUDED.user_question,
+                        assistant_answer = EXCLUDED.assistant_answer,
+                        context_payload = EXCLUDED.context_payload
+                    """
+                ),
+                {
+                    "conversation_id": conversation_id,
+                    "turn_index": turn_index,
+                    "account_id": account_id,
+                    "decision_cycle_ts": decision_cycle_ts,
+                    "model_used": model_used,
+                    "user_question": user_question,
+                    "assistant_answer": assistant_answer,
+                    "context_payload": json.dumps(context_payload or {}, default=str),
+                },
+            )
+
 
 def _json_like(value: Any) -> Any:
     if isinstance(value, str):
