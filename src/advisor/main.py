@@ -118,7 +118,15 @@ class AdvisorService:
         return decision
 
     def _on_ibkr_error(self, payload: dict) -> None:
-        self.logger.error("IBKR API error", **payload)
+        code = payload.get("error_code")
+        req_id = payload.get("req_id")
+        msg = payload.get("error_string", "")
+        log_level = payload.get("level", "error")
+        message = f"IBKR API code={code} req_id={req_id}: {msg}"
+        if log_level in {"info", "warning"}:
+            self.logger.info(message, **payload)
+            return
+        self.logger.error(message, **payload)
 
     def _on_connectivity_progress(self, payload: dict) -> None:
         self.logger.info("IBKR connectivity progress", **payload)

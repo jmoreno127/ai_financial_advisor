@@ -17,6 +17,8 @@ except Exception:  # pragma: no cover - optional dependency import guard
 LAST_PRICE_TICK = 4
 PREV_CLOSE_TICK = 9
 VOLUME_TICK = 8
+IBKR_INFO_CODES = {2104, 2106, 2107, 2108, 2158, 365}
+IBKR_WARNING_CODES = {2103, 2105, 2109, 2110}
 
 
 @dataclass
@@ -68,11 +70,17 @@ class MarketDataWrapper(EWrapper):
         self.connected_event.set()
 
     def error(self, reqId: int, errorCode: int, errorString: str, *args: Any) -> None:  # noqa: N802
+        level = "error"
+        if errorCode in IBKR_INFO_CODES:
+            level = "info"
+        elif errorCode in IBKR_WARNING_CODES:
+            level = "warning"
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "req_id": reqId,
             "error_code": errorCode,
             "error_string": errorString,
+            "level": level,
         }
         with self.state.lock:
             self.state.ibkr_errors.append(payload)

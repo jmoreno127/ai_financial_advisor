@@ -33,6 +33,7 @@ class IBKRClient:
         self._running = False
         self._next_req_id = 1000
         self._scanner_req_ids = [7001, 7002]
+        self._active_scanner_req_ids: set[int] = set()
 
         if EClient is None:
             self.client = None
@@ -58,6 +59,7 @@ class IBKRClient:
         if self.client is None:
             return
         self._running = False
+        self._active_scanner_req_ids.clear()
         try:
             self.client.disconnect()
         except Exception:
@@ -115,16 +117,18 @@ class IBKRClient:
             build_top_movers_subscription(self.config.scanner_max_results),
             build_most_active_subscription(self.config.scanner_max_results),
         ]
-        for req_id in self._scanner_req_ids:
+        for req_id in list(self._active_scanner_req_ids):
             try:
                 self.client.cancelScannerSubscription(req_id)
             except Exception:
                 pass
+        self._active_scanner_req_ids.clear()
 
         for req_id, sub in zip(self._scanner_req_ids, subs):
             if sub is None:
                 continue
             self.client.reqScannerSubscription(req_id, sub, [], [])
+            self._active_scanner_req_ids.add(req_id)
 
     def readiness_status(self) -> Dict[str, Any]:
         snapshot = self.state.snapshot()
