@@ -3,7 +3,7 @@
 Event-driven swing portfolio monitor that ingests IBKR account/market/scanner data and runs AI analysis every minute or on significant movement triggers.
 
 ## Features
-- IBKR live-first connection (`7496` by default, switchable via env)
+- IBKR live-first connection (`4001` by default, switchable via env)
 - 60-second cycle for portfolio and risk metrics
 - Hybrid trigger engine (`% move`, `PnL delta`, `z-score`)
 - Light AI analysis every minute, deep web-enabled analysis on triggers
