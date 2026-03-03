@@ -23,7 +23,7 @@ class AdvisorService:
         self.logger = StructuredLogger(config.json_log_path)
         self.store = PostgresStore(config.postgres_dsn)
         self.ai = AIAnalyzer(config)
-        self.ibkr = IBKRClient(config)
+        self.ibkr = IBKRClient(config, error_handler=self._on_ibkr_error)
         self.rolling = RollingWindowState()
 
     def start(self) -> None:
@@ -46,6 +46,13 @@ class AdvisorService:
         symbols = set(self.config.watchlist)
         symbols.update(self.ibkr.scanner_symbols())
         self.ibkr.ensure_market_data_subscriptions(symbols)
+        ready = self.ibkr.wait_for_initial_data(
+            timeout_seconds=60,
+            progress_interval_seconds=10,
+            progress_callback=self._on_connectivity_progress,
+        )
+        if not ready:
+            self.logger.error("Initial IBKR data wait timed out; continuing with partial snapshot")
 
         portfolio, instruments = self.ibkr.collect_snapshot(cycle_ts)
         self.rolling.update(portfolio, instruments)
@@ -107,6 +114,12 @@ class AdvisorService:
             risk_metrics=risk.model_dump(mode="json"),
         )
         return decision
+
+    def _on_ibkr_error(self, payload: dict) -> None:
+        self.logger.error("IBKR API error", **payload)
+
+    def _on_connectivity_progress(self, payload: dict) -> None:
+        self.logger.info("IBKR connectivity progress", **payload)
 
 
 def run_command(service: AdvisorService) -> None:

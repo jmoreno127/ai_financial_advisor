@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Tuple
 
 from advisor.config import AppConfig
 from advisor.ibkr.scanner import build_most_active_subscription, build_top_movers_subscription
@@ -19,10 +19,14 @@ except Exception:  # pragma: no cover - optional dependency import guard
 
 
 class IBKRClient:
-    def __init__(self, config: AppConfig):
+    def __init__(
+        self,
+        config: AppConfig,
+        error_handler: Callable[[Dict[str, Any]], None] | None = None,
+    ):
         self.config = config
         self.state = IBKRState()
-        self.wrapper = MarketDataWrapper(self.state)
+        self.wrapper = MarketDataWrapper(self.state, error_handler=error_handler)
         self._day_high_equity = 0.0
 
         self._thread: threading.Thread | None = None
@@ -122,6 +126,75 @@ class IBKRClient:
             if sub is None:
                 continue
             self.client.reqScannerSubscription(req_id, sub, [], [])
+
+    def readiness_status(self) -> Dict[str, Any]:
+        snapshot = self.state.snapshot()
+        account_values = snapshot["account_values"]
+        ticker_values = snapshot["ticker_values"]
+        positions = snapshot["positions"]
+        required_account_tags = ("NetLiquidation", "InitMarginReq", "ExcessLiquidity")
+
+        account_ready = all(tag in account_values for tag in required_account_tags)
+        positions_ready = self.wrapper.positions_ready_event.is_set()
+        market_data_ready = self.wrapper.market_data_event.is_set()
+
+        non_empty_tickers = 0
+        for values in ticker_values.values():
+            if values.get("last") is not None or values.get("prev_close") is not None:
+                non_empty_tickers += 1
+
+        return {
+            "connected": self.is_connected(),
+            "account_ready": account_ready,
+            "positions_ready": positions_ready,
+            "market_data_ready": market_data_ready,
+            "account_tags_received": sorted(account_values.keys()),
+            "positions_count": len(positions),
+            "tickers_with_data": non_empty_tickers,
+            "watchlist_size": len(self.config.watchlist),
+            "scanner_symbols": len(snapshot["scanner_symbols"]),
+        }
+
+    def wait_for_initial_data(
+        self,
+        timeout_seconds: int = 60,
+        progress_interval_seconds: int = 10,
+        progress_callback: Callable[[Dict[str, Any]], None] | None = None,
+    ) -> bool:
+        start = time.monotonic()
+        last_progress = -progress_interval_seconds
+
+        while True:
+            elapsed = int(time.monotonic() - start)
+            status = self.readiness_status()
+            ready = status["account_ready"] and status["positions_ready"]
+            if ready:
+                return True
+
+            if elapsed - last_progress >= progress_interval_seconds:
+                last_progress = elapsed
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "elapsed_seconds": elapsed,
+                            "timeout_seconds": timeout_seconds,
+                            **status,
+                        }
+                    )
+
+            if elapsed >= timeout_seconds:
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "elapsed_seconds": elapsed,
+                            "timeout_seconds": timeout_seconds,
+                            "timed_out": True,
+                            **status,
+                        }
+                    )
+                return False
+
+            time.sleep(1)
 
     def scanner_symbols(self) -> List[str]:
         snapshot = self.state.snapshot()

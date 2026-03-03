@@ -29,6 +29,8 @@ Event-driven swing portfolio monitor that ingests IBKR account/market/scanner da
 - `advisor once`: executes a single collection/analysis cycle
 - `advisor run`: starts scheduler loop at `RUN_INTERVAL_SECONDS`
 
+`advisor once` and `advisor run` now wait up to 60 seconds for initial IBKR account/position data and emit connectivity progress every 10 seconds in `logs/decisions.jsonl`.
+
 ## Safety
 - This service does not place orders.
 - It only emits recommendations for manual execution.

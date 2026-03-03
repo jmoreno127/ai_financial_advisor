@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from advisor.models import PositionSnapshot
 
@@ -26,6 +27,7 @@ class IBKRState:
     ticker_to_symbol: Dict[int, str] = field(default_factory=dict)
     symbol_to_ticker: Dict[str, int] = field(default_factory=dict)
     scanner_symbols: Dict[str, int] = field(default_factory=dict)
+    ibkr_errors: List[Dict[str, Any]] = field(default_factory=list)
     next_valid_order_id: Optional[int] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -43,22 +45,43 @@ class IBKRState:
                 "ticker_values": {k: dict(v) for k, v in self.ticker_values.items()},
                 "ticker_to_symbol": dict(self.ticker_to_symbol),
                 "scanner_symbols": dict(self.scanner_symbols),
+                "ibkr_errors": list(self.ibkr_errors),
             }
 
 
 class MarketDataWrapper(EWrapper):
-    def __init__(self, state: IBKRState):
+    def __init__(
+        self,
+        state: IBKRState,
+        error_handler: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
         super().__init__()
         self.state = state
+        self.error_handler = error_handler
         self.connected_event = threading.Event()
+        self.account_summary_event = threading.Event()
         self.positions_ready_event = threading.Event()
+        self.market_data_event = threading.Event()
 
     def nextValidId(self, orderId: int) -> None:  # noqa: N802
         self.state.next_valid_order_id = orderId
         self.connected_event.set()
 
     def error(self, reqId: int, errorCode: int, errorString: str, *args: Any) -> None:  # noqa: N802
-        _ = (reqId, errorCode, errorString, args)
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "req_id": reqId,
+            "error_code": errorCode,
+            "error_string": errorString,
+        }
+        with self.state.lock:
+            self.state.ibkr_errors.append(payload)
+            if len(self.state.ibkr_errors) > 200:
+                self.state.ibkr_errors = self.state.ibkr_errors[-200:]
+
+        if self.error_handler is not None:
+            self.error_handler(payload)
+        _ = args
 
     def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str) -> None:  # noqa: N802
         _ = (reqId, account, currency)
@@ -68,6 +91,7 @@ class MarketDataWrapper(EWrapper):
             return
         with self.state.lock:
             self.state.account_values[tag] = numeric_value
+        self.account_summary_event.set()
 
     def position(self, account: str, contract: Any, position: float, avgCost: float) -> None:  # noqa: N802
         _ = account
@@ -128,12 +152,14 @@ class MarketDataWrapper(EWrapper):
                 slot["last"] = price
             elif tickType == PREV_CLOSE_TICK:
                 slot["prev_close"] = price
+        self.market_data_event.set()
 
     def tickSize(self, reqId: int, tickType: int, size: float) -> None:  # noqa: N802
         with self.state.lock:
             slot = self.state.ticker_values.setdefault(reqId, {})
             if tickType == VOLUME_TICK:
                 slot["volume"] = float(size)
+        self.market_data_event.set()
 
     def pnl(self, reqId: int, dailyPnL: float, unrealizedPnL: float, realizedPnL: float) -> None:  # noqa: N802
         _ = reqId
