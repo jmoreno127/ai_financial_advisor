@@ -32,3 +32,13 @@ Event-driven swing portfolio monitor that ingests IBKR account/market/scanner da
 ## Safety
 - This service does not place orders.
 - It only emits recommendations for manual execution.
+
+## To start the docker of postgres, run:
+
+```bash
+docker run --name ai-advisor-postgres \
+  --env-file .env \
+  -p 5432:5432 \
+  -v ai_advisor_pgdata:/var/lib/postgresql/data \
+  -d postgres:16
+```
