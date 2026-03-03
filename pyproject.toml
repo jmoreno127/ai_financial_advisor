@@ -27,6 +27,9 @@ dependencies = [
 [project.scripts]
 advisor = "advisor.main:main"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/advisor"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 addopts = "-q"
