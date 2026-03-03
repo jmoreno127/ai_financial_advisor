@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
+
+from advisor.models import PositionSnapshot
+
+try:
+    from ibapi.wrapper import EWrapper
+except Exception:  # pragma: no cover - optional dependency import guard
+    class EWrapper:  # type: ignore[override]
+        pass
+
+
+LAST_PRICE_TICK = 4
+PREV_CLOSE_TICK = 9
+VOLUME_TICK = 8
+
+
+@dataclass
+class IBKRState:
+    account_values: Dict[str, float] = field(default_factory=dict)
+    positions: Dict[str, PositionSnapshot] = field(default_factory=dict)
+    ticker_values: Dict[int, Dict[str, float]] = field(default_factory=dict)
+    ticker_to_symbol: Dict[int, str] = field(default_factory=dict)
+    symbol_to_ticker: Dict[str, int] = field(default_factory=dict)
+    scanner_symbols: Dict[str, int] = field(default_factory=dict)
+    next_valid_order_id: Optional[int] = None
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def register_ticker(self, symbol: str, ticker_id: int) -> None:
+        with self.lock:
+            self.symbol_to_ticker[symbol] = ticker_id
+            self.ticker_to_symbol[ticker_id] = symbol
+            self.ticker_values.setdefault(ticker_id, {})
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self.lock:
+            return {
+                "account_values": dict(self.account_values),
+                "positions": {k: v.model_copy(deep=True) for k, v in self.positions.items()},
+                "ticker_values": {k: dict(v) for k, v in self.ticker_values.items()},
+                "ticker_to_symbol": dict(self.ticker_to_symbol),
+                "scanner_symbols": dict(self.scanner_symbols),
+            }
+
+
+class MarketDataWrapper(EWrapper):
+    def __init__(self, state: IBKRState):
+        super().__init__()
+        self.state = state
+        self.connected_event = threading.Event()
+        self.positions_ready_event = threading.Event()
+
+    def nextValidId(self, orderId: int) -> None:  # noqa: N802
+        self.state.next_valid_order_id = orderId
+        self.connected_event.set()
+
+    def error(self, reqId: int, errorCode: int, errorString: str, *args: Any) -> None:  # noqa: N802
+        _ = (reqId, errorCode, errorString, args)
+
+    def accountSummary(self, reqId: int, account: str, tag: str, value: str, currency: str) -> None:  # noqa: N802
+        _ = (reqId, account, currency)
+        try:
+            numeric_value = float(value)
+        except Exception:
+            return
+        with self.state.lock:
+            self.state.account_values[tag] = numeric_value
+
+    def position(self, account: str, contract: Any, position: float, avgCost: float) -> None:  # noqa: N802
+        _ = account
+        symbol = getattr(contract, "symbol", "")
+        con_id = getattr(contract, "conId", None)
+        if not symbol:
+            return
+
+        with self.state.lock:
+            previous = self.state.positions.get(symbol)
+            self.state.positions[symbol] = PositionSnapshot(
+                symbol=symbol,
+                con_id=con_id,
+                quantity=position,
+                market_price=previous.market_price if previous else 0.0,
+                market_value=previous.market_value if previous else 0.0,
+                average_cost=avgCost,
+                unrealized_pnl=previous.unrealized_pnl if previous else 0.0,
+                realized_pnl=previous.realized_pnl if previous else 0.0,
+            )
+
+    def positionEnd(self) -> None:  # noqa: N802
+        self.positions_ready_event.set()
+
+    def updatePortfolio(  # noqa: N802
+        self,
+        contract: Any,
+        position: float,
+        marketPrice: float,
+        marketValue: float,
+        averageCost: float,
+        unrealizedPNL: float,
+        realizedPNL: float,
+        accountName: str,
+    ) -> None:
+        _ = accountName
+        symbol = getattr(contract, "symbol", "")
+        con_id = getattr(contract, "conId", None)
+        if not symbol:
+            return
+        with self.state.lock:
+            self.state.positions[symbol] = PositionSnapshot(
+                symbol=symbol,
+                con_id=con_id,
+                quantity=position,
+                market_price=marketPrice,
+                market_value=marketValue,
+                average_cost=averageCost,
+                unrealized_pnl=unrealizedPNL,
+                realized_pnl=realizedPNL,
+            )
+
+    def tickPrice(self, reqId: int, tickType: int, price: float, attrib: Any) -> None:  # noqa: N802
+        _ = attrib
+        with self.state.lock:
+            slot = self.state.ticker_values.setdefault(reqId, {})
+            if tickType == LAST_PRICE_TICK:
+                slot["last"] = price
+            elif tickType == PREV_CLOSE_TICK:
+                slot["prev_close"] = price
+
+    def tickSize(self, reqId: int, tickType: int, size: float) -> None:  # noqa: N802
+        with self.state.lock:
+            slot = self.state.ticker_values.setdefault(reqId, {})
+            if tickType == VOLUME_TICK:
+                slot["volume"] = float(size)
+
+    def pnl(self, reqId: int, dailyPnL: float, unrealizedPnL: float, realizedPnL: float) -> None:  # noqa: N802
+        _ = reqId
+        with self.state.lock:
+            self.state.account_values["DailyPnL"] = dailyPnL
+            self.state.account_values["UnrealizedPnL"] = unrealizedPnL
+            self.state.account_values["RealizedPnL"] = realizedPnL
+
+    def scannerData(  # noqa: N802
+        self,
+        reqId: int,
+        rank: int,
+        contractDetails: Any,
+        distance: str,
+        benchmark: str,
+        projection: str,
+        legsStr: str,
+    ) -> None:
+        _ = (reqId, rank, distance, benchmark, projection, legsStr)
+        contract = getattr(contractDetails, "contract", None)
+        if contract is None:
+            return
+        symbol = getattr(contract, "symbol", "")
+        con_id = getattr(contract, "conId", 0)
+        if not symbol:
+            return
+        with self.state.lock:
+            self.state.scanner_symbols[symbol] = con_id

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-financial-advisor"
+version = "0.1.0"
+description = "IBKR + LangChain OpenAI swing portfolio monitor"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "ibapi>=10.19.1",
+  "langchain>=0.3.0",
+  "langchain-openai>=0.2.0",
+  "openai>=1.50.0",
+  "pydantic>=2.8.0",
+  "python-dotenv>=1.0.1",
+  "SQLAlchemy>=2.0.35",
+  "psycopg[binary]>=3.2.1",
+  "apscheduler>=3.10.4",
+  "pandas>=2.2.2",
+  "numpy>=2.1.1",
+  "tenacity>=9.0.0",
+  "pytest>=8.3.2",
+]
+
+[project.scripts]
+advisor = "advisor.main:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-q"
