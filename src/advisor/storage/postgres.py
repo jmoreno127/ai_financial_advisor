@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -168,3 +168,38 @@ class PostgresStore:
         self.init_schema()
         with self.engine.connect() as conn:
             conn.execute(text("SELECT 1"))
+
+    def latest_decision(self, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        self.init_schema()
+        sql = """
+            SELECT cycle_ts, account_id, model_used, deep_analysis, request_payload, recommendation_payload, raw_response
+            FROM ai_decisions
+        """
+        params: Dict[str, Any] = {}
+        if account_id:
+            sql += " WHERE account_id = :account_id"
+            params["account_id"] = account_id
+        sql += " ORDER BY cycle_ts DESC LIMIT 1"
+
+        with self.engine.connect() as conn:
+            row = conn.execute(text(sql), params).mappings().first()
+            if row is None:
+                return None
+            return {
+                "cycle_ts": str(row["cycle_ts"]),
+                "account_id": row["account_id"],
+                "model_used": row["model_used"],
+                "deep_analysis": row["deep_analysis"],
+                "request_payload": _json_like(row["request_payload"]),
+                "recommendation_payload": _json_like(row["recommendation_payload"]),
+                "raw_response": row["raw_response"],
+            }
+
+
+def _json_like(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+    return value

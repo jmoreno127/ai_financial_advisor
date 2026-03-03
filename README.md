@@ -5,10 +5,12 @@ Event-driven swing portfolio monitor that ingests IBKR account/market/scanner da
 ## Features
 - IBKR live-first connection (`4001` by default, switchable via env)
 - 60-second cycle for portfolio and risk metrics
+- Watchlist supports futures contracts with explicit expiry/exchange
 - Hybrid trigger engine (`% move`, `PnL delta`, `z-score`)
 - Light AI analysis every minute, deep web-enabled analysis on triggers
 - Suggest-only recommendations (`NO_ACTION` or `SUGGEST_ACTION`)
 - PostgreSQL persistence + console and JSON logs
+- Follow-up chat mode using latest recommendation context
 
 ## Quick Start
 1. Create a virtualenv and install dependencies:
@@ -24,10 +26,24 @@ Event-driven swing portfolio monitor that ingests IBKR account/market/scanner da
 7. Run continuous monitor:
    - `advisor run`
 
+## Watchlist Formats
+`WATCHLIST` accepts mixed instruments:
+- Stock shorthand: `AAPL`
+- Stock explicit: `STK:AAPL:SMART:USD`
+- Futures shorthand: `MGC:202604:COMEX` or `MGC:20260428:COMEX`
+- Futures explicit: `FUT:MNQ:202606:CME:USD`
+
+Examples:
+- `WATCHLIST=MGC:202604:COMEX,SI:202605:COMEX,MNQ:202606:CME`
+- `WATCHLIST=STK:SPY:SMART:USD,MES:202606:CME`
+
 ## Commands
 - `advisor doctor`: validates env, DB, OpenAI, and IBKR socket
 - `advisor once`: executes a single collection/analysis cycle
 - `advisor run`: starts scheduler loop at `RUN_INTERVAL_SECONDS`
+- `advisor chat`: follow-up conversation using latest stored recommendation context
+  - Single turn: `advisor chat --question "Should I add Gold exposure?"`
+  - Interactive: `advisor chat`
 
 `advisor once` and `advisor run` now wait up to 60 seconds for initial IBKR account/position data and emit connectivity progress every 10 seconds in `logs/decisions.jsonl`.
 

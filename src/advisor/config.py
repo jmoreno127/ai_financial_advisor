@@ -82,4 +82,4 @@ def _env_float(key: str, default: float) -> float:
 
 def _env_list(key: str, default_csv: str) -> List[str]:
     raw = os.getenv(key, default_csv)
-    return [item.strip().upper() for item in raw.split(",") if item.strip()]
+    return [item.strip() for item in raw.split(",") if item.strip()]

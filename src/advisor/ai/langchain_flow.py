@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Tuple
+from typing import Any, Dict, List, Tuple
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
-from advisor.ai.prompt_templates import DEEP_SYSTEM_PROMPT, LIGHT_SYSTEM_PROMPT, USER_PROMPT_TEMPLATE
+from advisor.ai.prompt_templates import (
+    DEEP_SYSTEM_PROMPT,
+    FOLLOWUP_SYSTEM_PROMPT,
+    FOLLOWUP_USER_PROMPT_TEMPLATE,
+    LIGHT_SYSTEM_PROMPT,
+    USER_PROMPT_TEMPLATE,
+)
 from advisor.config import AppConfig
 from advisor.models import AnalysisRequest, Recommendation, RiskChecks
 
@@ -27,6 +33,7 @@ class AIAnalyzer:
         self.parser = None
         self.light_prompt = None
         self.deep_prompt = None
+        self.followup_prompt = None
         self.light_llm = None
         self.deep_llm = None
 
@@ -37,6 +44,9 @@ class AIAnalyzer:
             )
             self.deep_prompt = ChatPromptTemplate.from_messages(
                 [("system", DEEP_SYSTEM_PROMPT), ("human", USER_PROMPT_TEMPLATE)]
+            )
+            self.followup_prompt = ChatPromptTemplate.from_messages(
+                [("system", FOLLOWUP_SYSTEM_PROMPT), ("human", FOLLOWUP_USER_PROMPT_TEMPLATE)]
             )
             self.light_llm = ChatOpenAI(
                 model=config.openai_model_light,
@@ -57,6 +67,37 @@ class AIAnalyzer:
             return recommendation, model_name, raw
         except Exception as exc:
             return fallback_recommendation(f"AI parse failure fallback: {exc}"), "fallback", ""
+
+    def answer_follow_up(
+        self,
+        question: str,
+        latest_decision_context: Dict[str, Any] | None,
+        history: List[Dict[str, str]] | None = None,
+    ) -> Tuple[str, str]:
+        if not LANGCHAIN_AVAILABLE:
+            return "LangChain/OpenAI dependencies unavailable.", "fallback"
+        if not self.config.openai_enabled:
+            return "OPENAI_API_KEY not configured.", "fallback"
+        if self.followup_prompt is None:
+            return "Follow-up prompt is not initialized.", "fallback"
+
+        llm = self.deep_llm or self.light_llm
+        if llm is None:
+            return "LLM client is not configured.", "fallback"
+
+        history_text = _render_history(history or [])
+        latest_json = json.dumps(latest_decision_context or {}, default=str)
+        try:
+            message = self.followup_prompt.format_messages(
+                latest_decision_json=latest_json,
+                history_text=history_text,
+                question=question,
+            )
+            response = llm.invoke(message)
+            answer = extract_text(response.content).strip()
+            return (answer or "No response generated."), self.config.openai_model_deep
+        except Exception as exc:
+            return f"Follow-up call failed: {exc}", "fallback"
 
     @retry(
         stop=stop_after_attempt(3),
@@ -148,3 +189,14 @@ def fallback_recommendation(note: str) -> Recommendation:
         ttl_minutes=5,
         monitoring_note=note,
     )
+
+
+def _render_history(history: List[Dict[str, str]]) -> str:
+    if not history:
+        return "No prior follow-up turns."
+    lines: List[str] = []
+    for turn in history:
+        role = turn.get("role", "user")
+        content = turn.get("content", "")
+        lines.append(f"{role.upper()}: {content}")
+    return "\n".join(lines)

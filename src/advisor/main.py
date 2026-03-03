@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import socket
 from datetime import datetime, timezone
+from typing import Dict, List
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
@@ -209,18 +210,66 @@ def doctor_command(config: AppConfig) -> int:
     return 1 if failed else 0
 
 
+def chat_command(config: AppConfig, question: str | None) -> int:
+    logger = StructuredLogger(config.json_log_path)
+    store = PostgresStore(config.postgres_dsn)
+    ai = AIAnalyzer(config)
+
+    try:
+        latest = store.latest_decision(config.ibkr_account_id or None)
+    except Exception as exc:
+        logger.error("Unable to load latest decision from database", error=str(exc))
+        return 1
+
+    if latest is None:
+        logger.error("No prior decisions found; run `advisor once` or `advisor run` first.")
+        return 1
+
+    history: List[Dict[str, str]] = []
+
+    def _ask(user_question: str) -> None:
+        answer, model_used = ai.answer_follow_up(user_question, latest, history)
+        print(f"advisor ({model_used})> {answer}")
+        history.append({"role": "user", "content": user_question})
+        history.append({"role": "assistant", "content": answer})
+        logger.info("Follow-up chat turn", model_used=model_used, question=user_question, answer=answer)
+
+    if question:
+        _ask(question)
+        return 0
+
+    print("Follow-up chat started. Type your question and press Enter. Type `exit` to quit.")
+    print(f"Loaded latest recommendation from cycle: {latest.get('cycle_ts')}")
+    while True:
+        try:
+            user_question = input("you> ").strip()
+        except EOFError:
+            print()
+            break
+        if not user_question:
+            continue
+        if user_question.lower() in {"exit", "quit"}:
+            break
+        _ask(user_question)
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="IBKR + OpenAI portfolio advisor")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run")
     sub.add_parser("once")
     sub.add_parser("doctor")
+    chat_parser = sub.add_parser("chat")
+    chat_parser.add_argument("--question", type=str, default=None, help="Single follow-up question")
 
     args = parser.parse_args()
     config = AppConfig.from_env()
 
     if args.command == "doctor":
         raise SystemExit(doctor_command(config))
+    if args.command == "chat":
+        raise SystemExit(chat_command(config, args.question))
 
     service = AdvisorService(config)
     if args.command == "once":

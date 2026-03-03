@@ -90,19 +90,18 @@ class IBKRClient:
         if self.client is None or Contract is None:
             return
 
-        for raw_symbol in symbols:
-            symbol = raw_symbol.upper().strip()
-            if not symbol:
+        for watchlist_entry in symbols:
+            key, contract = _contract_from_watchlist_entry(watchlist_entry)
+            if not key or contract is None:
                 continue
 
             with self.state.lock:
-                existing_id = self.state.symbol_to_ticker.get(symbol)
+                existing_id = self.state.symbol_to_ticker.get(key)
             if existing_id is not None:
                 continue
 
             ticker_id = self._next_request_id()
-            contract = _stock_contract(symbol)
-            self.state.register_ticker(symbol, ticker_id)
+            self.state.register_ticker(key, ticker_id)
             self.client.reqMktData(ticker_id, contract, "", False, False, [])
 
     def request_scanner_refresh(self) -> None:
@@ -285,3 +284,69 @@ def _stock_contract(symbol: str):
     contract.exchange = "SMART"
     contract.currency = "USD"
     return contract
+
+
+def _futures_contract(symbol: str, expiry: str, exchange: str, currency: str = "USD"):
+    if Contract is None:
+        return None
+    contract = Contract()
+    contract.symbol = symbol
+    contract.secType = "FUT"
+    contract.lastTradeDateOrContractMonth = expiry
+    contract.exchange = exchange
+    contract.currency = currency
+    return contract
+
+
+def _contract_from_watchlist_entry(entry: str):
+    """
+    Supported formats:
+    - STK symbol only: AAPL
+    - Explicit stock: STK:AAPL[:SMART[:USD]]
+    - Futures explicit: FUT:GC:202606|20260628:COMEX[:USD]
+    - Futures shorthand: GC:202606|20260628:COMEX[:USD]
+    """
+    text = entry.strip()
+    if not text:
+        return "", None
+
+    parts = [part.strip() for part in text.split(":") if part.strip()]
+    if not parts:
+        return "", None
+
+    head = parts[0].upper()
+
+    if head == "STK":
+        if len(parts) < 2:
+            return "", None
+        symbol = parts[1].upper()
+        exchange = parts[2].upper() if len(parts) >= 3 else "SMART"
+        currency = parts[3].upper() if len(parts) >= 4 else "USD"
+        contract = _stock_contract(symbol)
+        if contract is None:
+            return "", None
+        contract.exchange = exchange
+        contract.currency = currency
+        return symbol, contract
+
+    if head == "FUT":
+        if len(parts) < 4:
+            return "", None
+        symbol = parts[1].upper()
+        expiry = parts[2]
+        exchange = parts[3].upper()
+        currency = parts[4].upper() if len(parts) >= 5 else "USD"
+        key = f"{symbol}-{expiry}-{exchange}"
+        return key, _futures_contract(symbol, expiry, exchange, currency)
+
+    # FUT shorthand: SYMBOL:YYYYMM:EXCHANGE[:CURRENCY]
+    if len(parts) >= 3 and parts[1].isdigit() and len(parts[1]) in (6, 8):
+        symbol = parts[0].upper()
+        expiry = parts[1]
+        exchange = parts[2].upper()
+        currency = parts[3].upper() if len(parts) >= 4 else "USD"
+        key = f"{symbol}-{expiry}-{exchange}"
+        return key, _futures_contract(symbol, expiry, exchange, currency)
+
+    symbol = text.upper()
+    return symbol, _stock_contract(symbol)

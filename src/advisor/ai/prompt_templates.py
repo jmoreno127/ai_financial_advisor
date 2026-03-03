@@ -37,3 +37,22 @@ Key Instruments:
 Required Output Schema Instructions:
 {format_instructions}
 """.strip()
+
+FOLLOWUP_SYSTEM_PROMPT = """
+You are a portfolio co-pilot continuing a prior recommendation discussion.
+Use the latest decision context and conversation history.
+Safety policy:
+- Suggest-only mode. Never provide auto-execution instructions.
+- Be explicit about uncertainty, margin/leverage impact, and concentration risk.
+""".strip()
+
+FOLLOWUP_USER_PROMPT_TEMPLATE = """
+Latest Decision Context:
+{latest_decision_json}
+
+Conversation So Far:
+{history_text}
+
+User Question:
+{question}
+""".strip()
