@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Engine
 
 from advisor.models import DecisionRecord, InstrumentSnapshot, PortfolioSnapshot, TriggerEvent
@@ -249,6 +250,48 @@ class PostgresStore:
                     "context_payload": json.dumps(context_payload or {}, default=str),
                 },
             )
+
+    def instrument_history(
+        self,
+        symbols: List[str],
+        since_ts: datetime,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        self.init_schema()
+        if not symbols:
+            return {}
+
+        stmt = (
+            text(
+                """
+                SELECT cycle_ts, symbol, source, payload
+                FROM instrument_snapshots
+                WHERE symbol IN :symbols
+                  AND cycle_ts >= :since_ts
+                ORDER BY symbol ASC, cycle_ts ASC
+                """
+            )
+            .bindparams(bindparam("symbols", expanding=True))
+        )
+
+        result: Dict[str, List[Dict[str, Any]]] = {symbol: [] for symbol in symbols}
+        with self.engine.connect() as conn:
+            rows = conn.execute(stmt, {"symbols": symbols, "since_ts": since_ts}).mappings()
+            for row in rows:
+                payload = _json_like(row["payload"])
+                if not isinstance(payload, dict):
+                    payload = {}
+                symbol = str(row["symbol"])
+                result.setdefault(symbol, []).append(
+                    {
+                        "cycle_ts": row["cycle_ts"],
+                        "symbol": symbol,
+                        "source": row["source"],
+                        "last_price": payload.get("last_price", 0.0),
+                        "volume": payload.get("volume", 0.0),
+                        "pct_change": payload.get("pct_change", 0.0),
+                    }
+                )
+        return result
 
 
 def _json_like(value: Any) -> Any:

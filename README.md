@@ -11,6 +11,7 @@ Event-driven swing portfolio monitor that ingests IBKR account/market/scanner da
 - Suggest-only recommendations (`NO_ACTION` or `SUGGEST_ACTION`)
 - PostgreSQL persistence + console and JSON logs
 - Follow-up chat mode using latest recommendation context
+- Follow-up chat enriches requested instruments with 1w/3d/5h metrics (VWAP, volatility, drawdown, volume, returns)
 
 ## Quick Start
 1. Create a virtualenv and install dependencies:

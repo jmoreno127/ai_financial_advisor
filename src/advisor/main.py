@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import socket
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 from uuid import uuid4
 
@@ -10,6 +10,11 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from advisor.ai.langchain_flow import AIAnalyzer
 from advisor.config import AppConfig
+from advisor.engine.followup_market_context import (
+    build_followup_market_context,
+    canonical_instrument_key,
+    extract_requested_instruments,
+)
 from advisor.engine.metrics import RollingWindowState, compute_risk_metrics
 from advisor.engine.risk_policy import apply_balanced_swing_policy
 from advisor.engine.triggers import evaluate_triggers, should_run_deep_analysis
@@ -237,10 +242,25 @@ def chat_command(config: AppConfig, question: str | None) -> int:
     history: List[Dict[str, str]] = []
     conversation_id = str(uuid4())
     turn_index = 0
+    known_symbols = _known_symbols_for_followup(config.watchlist, latest)
 
     def _ask(user_question: str) -> None:
         nonlocal turn_index
-        answer, model_used = ai.answer_follow_up(user_question, latest, history)
+        now_utc = datetime.now(timezone.utc)
+        instrument_symbols = _symbols_for_history(user_question, known_symbols)
+        history_by_symbol = store.instrument_history(symbols=instrument_symbols, since_ts=now_utc - timedelta(days=7))
+        followup_market_context = build_followup_market_context(
+            question=user_question,
+            known_symbols=known_symbols,
+            history_by_symbol=history_by_symbol,
+            now=now_utc,
+        )
+        latest_with_context = {
+            **latest,
+            "followup_market_context": followup_market_context,
+        }
+
+        answer, model_used = ai.answer_follow_up(user_question, latest_with_context, history)
         print(f"advisor ({model_used})> {answer}")
         history.append({"role": "user", "content": user_question})
         history.append({"role": "assistant", "content": answer})
@@ -257,6 +277,7 @@ def chat_command(config: AppConfig, question: str | None) -> int:
                 context_payload={
                     "latest_recommendation": latest.get("recommendation_payload"),
                     "latest_request": latest.get("request_payload"),
+                    "followup_market_context": followup_market_context,
                 },
             )
         except Exception as exc:
@@ -282,6 +303,44 @@ def chat_command(config: AppConfig, question: str | None) -> int:
             break
         _ask(user_question)
     return 0
+
+
+def _known_symbols_for_followup(watchlist: List[str], latest: Dict[str, object]) -> List[str]:
+    symbols: set[str] = set()
+    for entry in watchlist:
+        canonical = canonical_instrument_key(entry)
+        if canonical:
+            symbols.add(canonical)
+
+    request_payload = latest.get("request_payload")
+    if isinstance(request_payload, dict):
+        key_instruments = request_payload.get("key_instruments")
+        if isinstance(key_instruments, list):
+            for item in key_instruments:
+                if not isinstance(item, dict):
+                    continue
+                symbol = item.get("symbol")
+                if isinstance(symbol, str):
+                    canonical = canonical_instrument_key(symbol)
+                    if canonical:
+                        symbols.add(canonical)
+
+    recommendation_payload = latest.get("recommendation_payload")
+    if isinstance(recommendation_payload, dict):
+        target_symbols = recommendation_payload.get("target_symbols")
+        if isinstance(target_symbols, list):
+            for symbol in target_symbols:
+                if isinstance(symbol, str):
+                    canonical = canonical_instrument_key(symbol)
+                    if canonical:
+                        symbols.add(canonical)
+
+    return sorted(symbols)
+
+
+def _symbols_for_history(question: str, known_symbols: List[str]) -> List[str]:
+    requested = extract_requested_instruments(question, known_symbols)
+    return sorted(set(requested))
 
 
 def main() -> None:
