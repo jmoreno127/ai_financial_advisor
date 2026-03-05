@@ -40,3 +40,13 @@ def test_historical_error_marks_request_done() -> None:
     assert event.is_set() is True
     _, meta = state.consume_historical_request(7001)
     assert "162" in meta.get("error", "")
+
+
+def test_non_fatal_historical_warning_does_not_complete_request() -> None:
+    state = IBKRState()
+    wrapper = MarketDataWrapper(state)
+    event = state.start_historical_request(9001, {"instrument_key": "MES-202603-CME"})
+
+    wrapper.error(9001, 2174, "Warning: You submitted request with date-time without time zone")
+
+    assert event.is_set() is False

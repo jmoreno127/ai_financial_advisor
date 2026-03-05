@@ -9,9 +9,13 @@ from advisor.models import HistoricalBar
 class _DummyLogger:
     def __init__(self) -> None:
         self.errors: list[dict] = []
+        self.infos: list[dict] = []
 
     def error(self, message: str, **kwargs: object) -> None:
         self.errors.append({"message": message, **kwargs})
+
+    def info(self, message: str, **kwargs: object) -> None:
+        self.infos.append({"message": message, **kwargs})
 
 
 class _DummyStore:
@@ -40,8 +44,8 @@ def test_refresh_historical_cache_success(monkeypatch) -> None:
     now = datetime.now(timezone.utc)
 
     class _FakeIBKRClient:
-        def __init__(self, config) -> None:
-            _ = config
+        def __init__(self, config, error_handler=None) -> None:
+            _ = (config, error_handler)
 
         def start(self, subscribe_core: bool = True, subscribe_watchlist: bool = True) -> None:
             _ = (subscribe_core, subscribe_watchlist)
@@ -87,8 +91,8 @@ def test_refresh_historical_cache_success(monkeypatch) -> None:
 
 def test_refresh_historical_cache_connection_failure(monkeypatch) -> None:
     class _FakeIBKRClient:
-        def __init__(self, config) -> None:
-            _ = config
+        def __init__(self, config, error_handler=None) -> None:
+            _ = (config, error_handler)
 
         def start(self, subscribe_core: bool = True, subscribe_watchlist: bool = True) -> None:
             _ = (subscribe_core, subscribe_watchlist)
@@ -110,8 +114,8 @@ def test_refresh_historical_cache_connection_failure(monkeypatch) -> None:
 
 def test_refresh_historical_cache_no_bars(monkeypatch) -> None:
     class _FakeIBKRClient:
-        def __init__(self, config) -> None:
-            _ = config
+        def __init__(self, config, error_handler=None) -> None:
+            _ = (config, error_handler)
 
         def start(self, subscribe_core: bool = True, subscribe_watchlist: bool = True) -> None:
             _ = (subscribe_core, subscribe_watchlist)

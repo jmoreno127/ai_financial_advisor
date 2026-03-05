@@ -19,6 +19,7 @@ PREV_CLOSE_TICK = 9
 VOLUME_TICK = 8
 IBKR_INFO_CODES = {2104, 2106, 2107, 2108, 2158, 365}
 IBKR_WARNING_CODES = {2103, 2105, 2109, 2110}
+IBKR_NON_FATAL_HISTORICAL_CODES = {2174, 2176}
 
 
 @dataclass
@@ -124,7 +125,12 @@ class MarketDataWrapper(EWrapper):
             if len(self.state.ibkr_errors) > 200:
                 self.state.ibkr_errors = self.state.ibkr_errors[-200:]
 
-        if errorCode not in IBKR_INFO_CODES and self.state.get_historical_done_event(reqId) is not None:
+        should_complete_historical = (
+            errorCode not in IBKR_INFO_CODES
+            and errorCode not in IBKR_WARNING_CODES
+            and errorCode not in IBKR_NON_FATAL_HISTORICAL_CODES
+        )
+        if should_complete_historical and self.state.get_historical_done_event(reqId) is not None:
             self.state.complete_historical_request(reqId, error=f"{errorCode}: {errorString}")
 
         if self.error_handler is not None:

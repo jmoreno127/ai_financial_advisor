@@ -400,7 +400,7 @@ def _refresh_historical_cache_for_symbols(
 
     failures: Dict[str, str] = {}
 
-    ibkr = IBKRClient(config)
+    ibkr = IBKRClient(config, error_handler=lambda payload: _log_ibkr_historical_payload(logger, payload))
     try:
         ibkr.start(subscribe_core=False, subscribe_watchlist=False)
     except Exception as exc:
@@ -425,8 +425,18 @@ def _refresh_historical_cache_for_symbols(
                     failures[symbol] = "IBKR returned no historical bars."
                 else:
                     store.upsert_historical_bars(bars)
+                    logger.info(
+                        "Historical bars fetched",
+                        symbol=symbol,
+                        bars=len(bars),
+                        bar_size=config.ibkr_hist_bar_size,
+                        duration=config.ibkr_hist_duration,
+                        what_to_show=config.ibkr_hist_what_to_show,
+                        use_rth=config.ibkr_hist_use_rth,
+                    )
             except Exception as exc:
                 failures[symbol] = str(exc)
+                logger.error("Historical bar fetch failed", symbol=symbol, error=str(exc))
             if idx < len(symbols) - 1:
                 time.sleep(0.35)
     finally:
@@ -437,6 +447,18 @@ def _refresh_historical_cache_for_symbols(
     except Exception as exc:
         logger.error("Failed to prune historical bar cache", error=str(exc))
     return failures
+
+
+def _log_ibkr_historical_payload(logger: StructuredLogger, payload: Dict[str, object]) -> None:
+    level = str(payload.get("level", "error"))
+    code = payload.get("error_code")
+    req_id = payload.get("req_id")
+    msg = payload.get("error_string", "")
+    message = f"IBKR historical API code={code} req_id={req_id}: {msg}"
+    if level in {"info", "warning"}:
+        logger.info(message, **payload)
+        return
+    logger.error(message, **payload)
 
 
 def main() -> None:
