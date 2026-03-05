@@ -42,6 +42,23 @@ class InstrumentSnapshot(BaseModel):
     timestamp: datetime
 
 
+class HistoricalBar(BaseModel):
+    instrument_key: str
+    bar_ts: datetime
+    open: float = 0.0
+    high: float = 0.0
+    low: float = 0.0
+    close: float = 0.0
+    volume: float = 0.0
+    wap: float = 0.0
+    bar_count: int = 0
+    bar_size: str
+    what_to_show: str
+    use_rth: bool
+    source: str = "ibkr_tws"
+    fetched_at: datetime
+
+
 class PortfolioSnapshot(BaseModel):
     cycle_ts: datetime
     account_id: str

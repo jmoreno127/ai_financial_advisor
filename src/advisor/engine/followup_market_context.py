@@ -85,26 +85,79 @@ def build_followup_market_context(
     known_symbols: Iterable[str],
     history_by_symbol: Dict[str, Sequence[Dict[str, Any]]],
     now: datetime | None = None,
+    snapshot_fallback_by_symbol: Dict[str, Sequence[Dict[str, Any]]] | None = None,
+    fetch_failures: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     requested_symbols = extract_requested_instruments(question, known_symbols)
     metrics_by_symbol: Dict[str, Any] = {}
+    source_summary = {
+        "ibkr_historical_cache": 0,
+        "snapshot_fallback": 0,
+        "no_data": 0,
+        "fresh": 0,
+        "fallback": 0,
+        "missing": 0,
+    }
+
+    fallback_map = snapshot_fallback_by_symbol or {}
+    failure_map = fetch_failures or {}
 
     for symbol in requested_symbols:
-        points = sorted(history_by_symbol.get(symbol, []), key=_sort_cycle_ts)
-        metrics_by_symbol[symbol] = _summarize_symbol(points, now_utc)
+        primary_points = sorted(history_by_symbol.get(symbol, []), key=_sort_cycle_ts)
+        fallback_points = sorted(fallback_map.get(symbol, []), key=_sort_cycle_ts)
+        failure_reason = failure_map.get(symbol)
+
+        if primary_points:
+            summary = _summarize_symbol(primary_points, now_utc, data_source="ibkr_historical_cache", data_quality="fresh")
+        elif fallback_points:
+            summary = _summarize_symbol(
+                fallback_points,
+                now_utc,
+                data_source="snapshot_fallback",
+                data_quality="fallback",
+                fallback_reason=failure_reason or "historical cache empty",
+            )
+        else:
+            summary = {
+                "status": "no_data",
+                "latest": None,
+                "windows": {},
+                "data_source": "no_data",
+                "data_quality": "missing",
+                "fallback_reason": failure_reason or "No historical or fallback snapshot data",
+            }
+
+        source_summary[summary["data_source"]] = source_summary.get(summary["data_source"], 0) + 1
+        source_summary[summary["data_quality"]] = source_summary.get(summary["data_quality"], 0) + 1
+        metrics_by_symbol[symbol] = summary
 
     return {
         "generated_at_utc": now_utc.isoformat(),
         "requested_symbols": requested_symbols,
         "window_definitions": {name: str(duration) for name, duration in WINDOW_SPECS},
+        "source_summary": source_summary,
         "metrics_by_symbol": metrics_by_symbol,
     }
 
 
-def _summarize_symbol(points: Sequence[Dict[str, Any]], now_utc: datetime) -> Dict[str, Any]:
+def _summarize_symbol(
+    points: Sequence[Dict[str, Any]],
+    now_utc: datetime,
+    *,
+    data_source: str,
+    data_quality: str,
+    fallback_reason: str | None = None,
+) -> Dict[str, Any]:
     if not points:
-        return {"status": "no_data", "latest": None, "windows": {}}
+        return {
+            "status": "no_data",
+            "latest": None,
+            "windows": {},
+            "data_source": "no_data",
+            "data_quality": "missing",
+            "fallback_reason": fallback_reason or "No data points",
+        }
 
     normalized: List[Dict[str, Any]] = []
     for item in points:
@@ -112,18 +165,32 @@ def _summarize_symbol(points: Sequence[Dict[str, Any]], now_utc: datetime) -> Di
         if not isinstance(ts, datetime):
             continue
         ts_utc = ts.astimezone(timezone.utc)
+        close_price = _as_float(item.get("last_price"))
+        high_price = _as_float(item.get("high")) or close_price
+        low_price = _as_float(item.get("low")) or close_price
+        open_price = _as_float(item.get("open")) or close_price
         normalized.append(
             {
                 "cycle_ts": ts_utc,
-                "last_price": _as_float(item.get("last_price")),
-                "volume": _as_float(item.get("volume")),
+                "open": open_price,
+                "high": max(high_price, close_price, open_price),
+                "low": min(low_price, close_price, open_price),
+                "last_price": close_price,
+                "volume": max(0.0, _as_float(item.get("volume"))),
                 "pct_change": _as_float(item.get("pct_change")),
-                "source": item.get("source", "unknown"),
+                "source": item.get("source", data_source),
             }
         )
 
     if not normalized:
-        return {"status": "no_data", "latest": None, "windows": {}}
+        return {
+            "status": "no_data",
+            "latest": None,
+            "windows": {},
+            "data_source": "no_data",
+            "data_quality": "missing",
+            "fallback_reason": fallback_reason or "No valid time-series points",
+        }
 
     latest_point = normalized[-1]
     windows: Dict[str, Any] = {}
@@ -134,9 +201,15 @@ def _summarize_symbol(points: Sequence[Dict[str, Any]], now_utc: datetime) -> Di
 
     return {
         "status": "ok",
+        "data_source": data_source,
+        "data_quality": data_quality,
+        "fallback_reason": fallback_reason,
         "latest": {
             "cycle_ts": latest_point["cycle_ts"].isoformat(),
             "last_price": latest_point["last_price"],
+            "open": latest_point["open"],
+            "high": latest_point["high"],
+            "low": latest_point["low"],
             "volume": latest_point["volume"],
             "pct_change": latest_point["pct_change"],
             "source": latest_point["source"],
@@ -155,15 +228,15 @@ def _summarize_window(points: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     if not points:
         return {"status": "no_data", "sample_count": 0}
 
-    prices = [item["last_price"] for item in points if item["last_price"] > 0]
-    if not prices:
+    closes = [item["last_price"] for item in points if item["last_price"] > 0]
+    if not closes:
         return {"status": "no_price_data", "sample_count": len(points)}
 
     volumes = [max(0.0, item["volume"]) for item in points]
-    start_price = prices[0]
-    end_price = prices[-1]
-    high_price = max(prices)
-    low_price = min(prices)
+    start_price = closes[0]
+    end_price = closes[-1]
+    high_price = max(item["high"] for item in points if item["high"] > 0) if points else max(closes)
+    low_price = min(item["low"] for item in points if item["low"] > 0) if points else min(closes)
 
     total_volume = sum(volumes)
     weighted_sum = 0.0
@@ -172,15 +245,11 @@ def _summarize_window(points: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         if item["last_price"] > 0 and item["volume"] > 0:
             weighted_sum += item["last_price"] * item["volume"]
             weighted_volume += item["volume"]
-    vwap = weighted_sum / weighted_volume if weighted_volume > 0 else mean(prices)
+    vwap = weighted_sum / weighted_volume if weighted_volume > 0 else mean(closes)
 
-    returns = _compute_step_returns(prices)
+    returns = _compute_step_returns(closes)
     realized_vol_pct = pstdev(returns) if returns else 0.0
-    up_move_ratio = (
-        sum(1 for value in returns if value > 0) / len(returns)
-        if returns
-        else 0.0
-    )
+    up_move_ratio = sum(1 for value in returns if value > 0) / len(returns) if returns else 0.0
 
     return_pct = _pct_diff(end_price, start_price)
     range_pct = _pct_diff(high_price, low_price) if low_price > 0 else 0.0
@@ -200,14 +269,14 @@ def _summarize_window(points: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "end_price": end_price,
         "high_price": high_price,
         "low_price": low_price,
-        "mean_price": mean(prices),
+        "mean_price": mean(closes),
         "vwap": vwap,
         "total_volume": total_volume,
         "return_pct": return_pct,
         "range_pct": range_pct,
         "price_vs_vwap_pct": price_vs_vwap_pct,
         "realized_volatility_pct_per_step": realized_vol_pct,
-        "max_drawdown_pct": _max_drawdown_pct(prices),
+        "max_drawdown_pct": _max_drawdown_pct(closes),
         "up_move_ratio": up_move_ratio,
     }
 
@@ -222,6 +291,9 @@ def _recent_points_for_window(
     return [
         {
             "cycle_ts": item["cycle_ts"].isoformat(),
+            "open": item["open"],
+            "high": item["high"],
+            "low": item["low"],
             "last_price": item["last_price"],
             "volume": item["volume"],
             "pct_change": item["pct_change"],

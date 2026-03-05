@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Iterable, List, Tuple
 from advisor.config import AppConfig
 from advisor.ibkr.scanner import build_most_active_subscription, build_top_movers_subscription
 from advisor.ibkr.wrapper import IBKRState, MarketDataWrapper
-from advisor.models import InstrumentSnapshot, PortfolioSnapshot, PositionSnapshot
+from advisor.models import HistoricalBar, InstrumentSnapshot, PortfolioSnapshot, PositionSnapshot
 
 try:
     from ibapi.client import EClient
@@ -40,7 +40,7 @@ class IBKRClient:
         else:
             self.client = EClient(self.wrapper)
 
-    def start(self) -> None:
+    def start(self, subscribe_core: bool = True, subscribe_watchlist: bool = True) -> None:
         if self.client is None:
             raise RuntimeError("ibapi is not installed. Install dependencies with `pip install -e .`.")
 
@@ -52,8 +52,10 @@ class IBKRClient:
         if not self.wrapper.connected_event.wait(timeout=10):
             raise RuntimeError("IBKR connection timeout. Verify TWS/IB Gateway host/port/API settings.")
 
-        self.refresh_core_subscriptions()
-        self.ensure_market_data_subscriptions(self.config.watchlist)
+        if subscribe_core:
+            self.refresh_core_subscriptions()
+        if subscribe_watchlist:
+            self.ensure_market_data_subscriptions(self.config.watchlist)
 
     def stop(self) -> None:
         if self.client is None:
@@ -274,6 +276,93 @@ class IBKRClient:
                 time.sleep(2)
         return False
 
+    def fetch_historical_bars(
+        self,
+        instrument_entry: str,
+        *,
+        duration: str,
+        bar_size: str,
+        what_to_show: str,
+        use_rth: bool,
+        timeout_seconds: int,
+    ) -> List[HistoricalBar]:
+        if self.client is None:
+            raise RuntimeError("ibapi is not installed. Install dependencies with `pip install -e .`.")
+        if not self.is_connected():
+            raise RuntimeError("IBKR is not connected")
+
+        instrument_key, contract = _contract_from_watchlist_entry(instrument_entry)
+        if not instrument_key or contract is None:
+            raise ValueError(f"Unsupported instrument format: {instrument_entry}")
+
+        req_id = self._next_request_id()
+        done_event = self.state.start_historical_request(
+            req_id,
+            {
+                "instrument_key": instrument_key,
+                "instrument_entry": instrument_entry,
+                "duration": duration,
+                "bar_size": bar_size,
+                "what_to_show": what_to_show,
+                "use_rth": use_rth,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        try:
+            self.client.reqHistoricalData(
+                req_id,
+                contract,
+                "",
+                duration,
+                bar_size,
+                what_to_show,
+                1 if use_rth else 0,
+                1,
+                False,
+                [],
+            )
+            completed = done_event.wait(timeout=max(1, timeout_seconds))
+            if not completed:
+                self.state.complete_historical_request(req_id, error="timeout")
+                raise TimeoutError(f"Historical data timeout for {instrument_key}")
+        finally:
+            try:
+                self.client.cancelHistoricalData(req_id)
+            except Exception:
+                pass
+
+        bars_raw, meta = self.state.consume_historical_request(req_id)
+        error = meta.get("error")
+        if error:
+            raise RuntimeError(f"Historical data error for {instrument_key}: {error}")
+
+        fetched_at = datetime.now(timezone.utc)
+        results: List[HistoricalBar] = []
+        for bar in bars_raw:
+            bar_ts = _parse_historical_bar_ts(bar.get("date"))
+            if bar_ts is None:
+                continue
+            results.append(
+                HistoricalBar(
+                    instrument_key=instrument_key,
+                    bar_ts=bar_ts,
+                    open=_to_float(bar.get("open")),
+                    high=_to_float(bar.get("high")),
+                    low=_to_float(bar.get("low")),
+                    close=_to_float(bar.get("close")),
+                    volume=_to_float(bar.get("volume")),
+                    wap=_to_float(bar.get("wap")),
+                    bar_count=int(_to_float(bar.get("bar_count"))),
+                    bar_size=bar_size,
+                    what_to_show=what_to_show,
+                    use_rth=use_rth,
+                    source="ibkr_tws",
+                    fetched_at=fetched_at,
+                )
+            )
+        return results
+
     def _next_request_id(self) -> int:
         self._next_req_id += 1
         return self._next_req_id
@@ -309,10 +398,19 @@ def _contract_from_watchlist_entry(entry: str):
     - Explicit stock: STK:AAPL[:SMART[:USD]]
     - Futures explicit: FUT:GC:202606|20260628:COMEX[:USD]
     - Futures shorthand: GC:202606|20260628:COMEX[:USD]
+    - Futures canonical key: GC-202606|20260628-COMEX
     """
     text = entry.strip()
     if not text:
         return "", None
+
+    dash_parts = [part.strip() for part in text.split("-") if part.strip()]
+    if len(dash_parts) == 3 and dash_parts[1].isdigit() and len(dash_parts[1]) in (6, 8):
+        symbol = dash_parts[0].upper()
+        expiry = dash_parts[1]
+        exchange = dash_parts[2].upper()
+        key = f"{symbol}-{expiry}-{exchange}"
+        return key, _futures_contract(symbol, expiry, exchange, "USD")
 
     parts = [part.strip() for part in text.split(":") if part.strip()]
     if not parts:
@@ -354,3 +452,44 @@ def _contract_from_watchlist_entry(entry: str):
 
     symbol = text.upper()
     return symbol, _stock_contract(symbol)
+
+
+def _parse_historical_bar_ts(raw: Any) -> datetime | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+
+    if text.isdigit():
+        try:
+            if len(text) >= 10:
+                return datetime.fromtimestamp(int(text), tz=timezone.utc)
+        except Exception:
+            return None
+
+    candidates = [
+        "%Y%m%d %H:%M:%S",
+        "%Y%m%d  %H:%M:%S",
+        "%Y%m%d-%H:%M:%S",
+        "%Y%m%d",
+    ]
+    base_text = text
+    if " " in text and text.count(" ") >= 2:
+        parts = text.split()
+        base_text = f"{parts[0]} {parts[1]}"
+
+    for fmt in candidates:
+        try:
+            parsed = datetime.strptime(base_text, fmt)
+            return parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _to_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

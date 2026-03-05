@@ -69,4 +69,5 @@ User Question:
 If Latest Decision Context includes followup_market_context:
 - Use its numeric window metrics (1w, 3d, 5h) and latest values in your reasoning.
 - If requested symbols have status=no_data, clearly state the data gap.
+- If data_quality is fallback or missing, clearly call out that the numbers are fallback/stale or unavailable.
 """.strip()

@@ -11,7 +11,7 @@ Event-driven swing portfolio monitor that ingests IBKR account/market/scanner da
 - Suggest-only recommendations (`NO_ACTION` or `SUGGEST_ACTION`)
 - PostgreSQL persistence + console and JSON logs
 - Follow-up chat mode using latest recommendation context
-- Follow-up chat enriches requested instruments with 1w/3d/5h metrics (VWAP, volatility, drawdown, volume, returns)
+- Follow-up chat enriches requested instruments with IBKR historical bars (1w/3d/5h VWAP, volatility, drawdown, volume, returns)
 
 ## Quick Start
 1. Create a virtualenv and install dependencies:
@@ -47,8 +47,17 @@ Examples:
   - Interactive: `advisor chat`
 
 Follow-up turns are persisted in PostgreSQL table `ai_followup_turns`.
+IBKR historical bars used by follow-up are cached in `instrument_historical_bars` and pruned by `HIST_CACHE_RETENTION_DAYS`.
 
 `advisor once` and `advisor run` now wait up to 60 seconds for initial IBKR account/position data and emit connectivity progress every 10 seconds in `logs/decisions.jsonl`.
+
+## Historical Follow-Up Settings
+- `IBKR_HIST_BAR_SIZE` (default `5 mins`)
+- `IBKR_HIST_WHAT_TO_SHOW` (default `TRADES`)
+- `IBKR_HIST_USE_RTH` (default `false`, includes RTH+ETH when false)
+- `IBKR_HIST_DURATION` (default `8 D`)
+- `IBKR_HIST_TIMEOUT_SECONDS` (default `20`)
+- `HIST_CACHE_RETENTION_DAYS` (default `30`)
 
 ## Safety
 - This service does not place orders.

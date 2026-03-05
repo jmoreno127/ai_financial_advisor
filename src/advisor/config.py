@@ -27,6 +27,12 @@ class AppConfig:
     max_single_name_exposure: float
     max_gross_leverage: float
     max_drawdown_from_day_high: float
+    ibkr_hist_bar_size: str
+    ibkr_hist_what_to_show: str
+    ibkr_hist_use_rth: bool
+    ibkr_hist_duration: str
+    ibkr_hist_timeout_seconds: int
+    hist_cache_retention_days: int
     json_log_path: str
 
     @classmethod
@@ -54,6 +60,12 @@ class AppConfig:
             max_single_name_exposure=_env_float("MAX_SINGLE_NAME_EXPOSURE", 0.22),
             max_gross_leverage=_env_float("MAX_GROSS_LEVERAGE", 2.2),
             max_drawdown_from_day_high=_env_float("MAX_DRAWDOWN_FROM_DAY_HIGH", 0.04),
+            ibkr_hist_bar_size=_env_str("IBKR_HIST_BAR_SIZE", "5 mins"),
+            ibkr_hist_what_to_show=_env_str("IBKR_HIST_WHAT_TO_SHOW", "TRADES"),
+            ibkr_hist_use_rth=_env_bool("IBKR_HIST_USE_RTH", False),
+            ibkr_hist_duration=_env_str("IBKR_HIST_DURATION", "8 D"),
+            ibkr_hist_timeout_seconds=_env_int("IBKR_HIST_TIMEOUT_SECONDS", 20),
+            hist_cache_retention_days=_env_int("HIST_CACHE_RETENTION_DAYS", 30),
             json_log_path=_env_str("JSON_LOG_PATH", "logs/decisions.jsonl"),
         )
 
@@ -78,6 +90,18 @@ def _env_float(key: str, default: float) -> float:
     if raw is None or raw.strip() == "":
         return default
     return float(raw)
+
+
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.getenv(key)
+    if raw is None or raw.strip() == "":
+        return default
+    text = raw.strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 def _env_list(key: str, default_csv: str) -> List[str]:

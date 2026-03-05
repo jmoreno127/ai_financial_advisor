@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import socket
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 from uuid import uuid4
@@ -243,17 +244,42 @@ def chat_command(config: AppConfig, question: str | None) -> int:
     conversation_id = str(uuid4())
     turn_index = 0
     known_symbols = _known_symbols_for_followup(config.watchlist, latest)
+    symbol_entry_map = _watchlist_entry_map(config.watchlist)
 
     def _ask(user_question: str) -> None:
         nonlocal turn_index
         now_utc = datetime.now(timezone.utc)
         instrument_symbols = _symbols_for_history(user_question, known_symbols)
-        history_by_symbol = store.instrument_history(symbols=instrument_symbols, since_ts=now_utc - timedelta(days=7))
+        since_ts = now_utc - timedelta(days=7)
+        fetch_failures = _refresh_historical_cache_for_symbols(
+            config=config,
+            logger=logger,
+            store=store,
+            symbols=instrument_symbols,
+            symbol_entry_map=symbol_entry_map,
+        )
+        history_by_symbol = store.historical_bars(
+            symbols=instrument_symbols,
+            since_ts=since_ts,
+            bar_size=config.ibkr_hist_bar_size,
+            what_to_show=config.ibkr_hist_what_to_show,
+            use_rth=config.ibkr_hist_use_rth,
+        )
+        fallback_symbols = [
+            symbol for symbol in instrument_symbols if symbol in fetch_failures or not history_by_symbol.get(symbol)
+        ]
+        for symbol in fallback_symbols:
+            if symbol not in fetch_failures and not history_by_symbol.get(symbol):
+                fetch_failures[symbol] = "No historical bars found in cache for requested lookback window."
+        fallback_history = store.instrument_history(symbols=fallback_symbols, since_ts=since_ts)
+
         followup_market_context = build_followup_market_context(
             question=user_question,
             known_symbols=known_symbols,
             history_by_symbol=history_by_symbol,
             now=now_utc,
+            snapshot_fallback_by_symbol=fallback_history,
+            fetch_failures=fetch_failures,
         )
         latest_with_context = {
             **latest,
@@ -341,6 +367,76 @@ def _known_symbols_for_followup(watchlist: List[str], latest: Dict[str, object])
 def _symbols_for_history(question: str, known_symbols: List[str]) -> List[str]:
     requested = extract_requested_instruments(question, known_symbols)
     return sorted(set(requested))
+
+
+def _watchlist_entry_map(watchlist: List[str]) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    for entry in watchlist:
+        canonical = canonical_instrument_key(entry)
+        if canonical:
+            result[canonical] = entry
+    return result
+
+
+def _symbol_to_watchlist_entry(symbol: str, watchlist_entry_map: Dict[str, str]) -> str:
+    mapped = watchlist_entry_map.get(symbol)
+    if mapped:
+        return mapped
+    parts = symbol.split("-")
+    if len(parts) == 3 and parts[1].isdigit() and len(parts[1]) in (6, 8):
+        return f"{parts[0]}:{parts[1]}:{parts[2]}"
+    return symbol
+
+
+def _refresh_historical_cache_for_symbols(
+    config: AppConfig,
+    logger: StructuredLogger,
+    store: PostgresStore,
+    symbols: List[str],
+    symbol_entry_map: Dict[str, str],
+) -> Dict[str, str]:
+    if not symbols:
+        return {}
+
+    failures: Dict[str, str] = {}
+
+    ibkr = IBKRClient(config)
+    try:
+        ibkr.start(subscribe_core=False, subscribe_watchlist=False)
+    except Exception as exc:
+        message = f"IBKR historical connection failed: {exc}"
+        for symbol in symbols:
+            failures[symbol] = message
+        return failures
+
+    try:
+        for idx, symbol in enumerate(symbols):
+            entry = _symbol_to_watchlist_entry(symbol, symbol_entry_map)
+            try:
+                bars = ibkr.fetch_historical_bars(
+                    entry,
+                    duration=config.ibkr_hist_duration,
+                    bar_size=config.ibkr_hist_bar_size,
+                    what_to_show=config.ibkr_hist_what_to_show,
+                    use_rth=config.ibkr_hist_use_rth,
+                    timeout_seconds=config.ibkr_hist_timeout_seconds,
+                )
+                if not bars:
+                    failures[symbol] = "IBKR returned no historical bars."
+                else:
+                    store.upsert_historical_bars(bars)
+            except Exception as exc:
+                failures[symbol] = str(exc)
+            if idx < len(symbols) - 1:
+                time.sleep(0.35)
+    finally:
+        ibkr.stop()
+
+    try:
+        store.prune_historical_bars(config.hist_cache_retention_days)
+    except Exception as exc:
+        logger.error("Failed to prune historical bar cache", error=str(exc))
+    return failures
 
 
 def main() -> None:
