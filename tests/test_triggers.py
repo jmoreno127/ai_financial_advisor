@@ -26,6 +26,12 @@ def _config() -> AppConfig:
         max_single_name_exposure=0.22,
         max_gross_leverage=2.2,
         max_drawdown_from_day_high=0.04,
+        ibkr_hist_bar_size="5 mins",
+        ibkr_hist_what_to_show="TRADES",
+        ibkr_hist_use_rth=False,
+        ibkr_hist_duration="8 D",
+        ibkr_hist_timeout_seconds=20,
+        hist_cache_retention_days=30,
         json_log_path="logs/decisions.jsonl",
     )
 

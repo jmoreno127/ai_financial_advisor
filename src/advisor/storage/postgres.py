@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Engine
 
-from advisor.models import DecisionRecord, InstrumentSnapshot, PortfolioSnapshot, TriggerEvent
+from advisor.models import DecisionRecord, HistoricalBar, InstrumentSnapshot, PortfolioSnapshot, TriggerEvent
 
 
 class PostgresStore:
@@ -292,6 +292,144 @@ class PostgresStore:
                     }
                 )
         return result
+
+    def upsert_historical_bars(self, bars: List[HistoricalBar]) -> None:
+        self.init_schema()
+        if not bars:
+            return
+
+        payload = [bar.model_dump(mode="json") for bar in bars]
+        stmt = text(
+            """
+            INSERT INTO instrument_historical_bars (
+                instrument_key,
+                bar_ts,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                wap,
+                bar_count,
+                bar_size,
+                what_to_show,
+                use_rth,
+                source,
+                fetched_at
+            ) VALUES (
+                :instrument_key,
+                :bar_ts,
+                :open,
+                :high,
+                :low,
+                :close,
+                :volume,
+                :wap,
+                :bar_count,
+                :bar_size,
+                :what_to_show,
+                :use_rth,
+                :source,
+                :fetched_at
+            )
+            ON CONFLICT (instrument_key, bar_ts, bar_size, what_to_show, use_rth)
+            DO UPDATE SET
+                open = EXCLUDED.open,
+                high = EXCLUDED.high,
+                low = EXCLUDED.low,
+                close = EXCLUDED.close,
+                volume = EXCLUDED.volume,
+                wap = EXCLUDED.wap,
+                bar_count = EXCLUDED.bar_count,
+                source = EXCLUDED.source,
+                fetched_at = EXCLUDED.fetched_at
+            """
+        )
+        with self.engine.begin() as conn:
+            conn.execute(stmt, payload)
+
+    def historical_bars(
+        self,
+        symbols: List[str],
+        since_ts: datetime,
+        bar_size: str,
+        what_to_show: str,
+        use_rth: bool,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        self.init_schema()
+        if not symbols:
+            return {}
+
+        stmt = (
+            text(
+                """
+                SELECT
+                    instrument_key,
+                    bar_ts,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                    wap,
+                    bar_count,
+                    source,
+                    fetched_at
+                FROM instrument_historical_bars
+                WHERE instrument_key IN :symbols
+                  AND bar_ts >= :since_ts
+                  AND bar_size = :bar_size
+                  AND what_to_show = :what_to_show
+                  AND use_rth = :use_rth
+                ORDER BY instrument_key ASC, bar_ts ASC
+                """
+            )
+            .bindparams(bindparam("symbols", expanding=True))
+        )
+
+        result: Dict[str, List[Dict[str, Any]]] = {symbol: [] for symbol in symbols}
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                stmt,
+                {
+                    "symbols": symbols,
+                    "since_ts": since_ts,
+                    "bar_size": bar_size,
+                    "what_to_show": what_to_show,
+                    "use_rth": use_rth,
+                },
+            ).mappings()
+            for row in rows:
+                symbol = str(row["instrument_key"])
+                result.setdefault(symbol, []).append(
+                    {
+                        "cycle_ts": row["bar_ts"],
+                        "open": float(row["open"] or 0.0),
+                        "high": float(row["high"] or 0.0),
+                        "low": float(row["low"] or 0.0),
+                        "last_price": float(row["close"] or 0.0),
+                        "volume": float(row["volume"] or 0.0),
+                        "wap": float(row["wap"] or 0.0),
+                        "bar_count": int(row["bar_count"] or 0),
+                        "source": row["source"],
+                        "fetched_at": row["fetched_at"],
+                    }
+                )
+        return result
+
+    def prune_historical_bars(self, retention_days: int) -> int:
+        self.init_schema()
+        retention_days = max(1, int(retention_days))
+        cutoff_ts = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        stmt = text(
+            """
+            DELETE FROM instrument_historical_bars
+            WHERE bar_ts < :cutoff_ts
+            """
+        )
+        with self.engine.begin() as conn:
+            result = conn.execute(stmt, {"cutoff_ts": cutoff_ts})
+            return int(result.rowcount or 0)
 
 
 def _json_like(value: Any) -> Any:

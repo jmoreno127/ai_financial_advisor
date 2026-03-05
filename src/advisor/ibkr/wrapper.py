@@ -30,6 +30,9 @@ class IBKRState:
     symbol_to_ticker: Dict[str, int] = field(default_factory=dict)
     scanner_symbols: Dict[str, int] = field(default_factory=dict)
     ibkr_errors: List[Dict[str, Any]] = field(default_factory=list)
+    historical_bars_by_req_id: Dict[int, List[Dict[str, Any]]] = field(default_factory=dict)
+    historical_done_by_req_id: Dict[int, threading.Event] = field(default_factory=dict)
+    historical_meta_by_req_id: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     next_valid_order_id: Optional[int] = None
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -49,6 +52,40 @@ class IBKRState:
                 "scanner_symbols": dict(self.scanner_symbols),
                 "ibkr_errors": list(self.ibkr_errors),
             }
+
+    def start_historical_request(self, req_id: int, meta: Dict[str, Any]) -> threading.Event:
+        with self.lock:
+            done_event = threading.Event()
+            self.historical_bars_by_req_id[req_id] = []
+            self.historical_done_by_req_id[req_id] = done_event
+            self.historical_meta_by_req_id[req_id] = dict(meta)
+            return done_event
+
+    def append_historical_bar(self, req_id: int, bar_data: Dict[str, Any]) -> None:
+        with self.lock:
+            self.historical_bars_by_req_id.setdefault(req_id, []).append(bar_data)
+
+    def complete_historical_request(self, req_id: int, error: str | None = None) -> None:
+        with self.lock:
+            done_event = self.historical_done_by_req_id.get(req_id)
+            meta = self.historical_meta_by_req_id.get(req_id)
+            if meta is not None:
+                meta["completed_at"] = datetime.now(timezone.utc).isoformat()
+                if error:
+                    meta["error"] = error
+            if done_event is not None:
+                done_event.set()
+
+    def get_historical_done_event(self, req_id: int) -> Optional[threading.Event]:
+        with self.lock:
+            return self.historical_done_by_req_id.get(req_id)
+
+    def consume_historical_request(self, req_id: int) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        with self.lock:
+            bars = self.historical_bars_by_req_id.pop(req_id, [])
+            meta = self.historical_meta_by_req_id.pop(req_id, {})
+            self.historical_done_by_req_id.pop(req_id, None)
+            return bars, meta
 
 
 class MarketDataWrapper(EWrapper):
@@ -86,6 +123,9 @@ class MarketDataWrapper(EWrapper):
             self.state.ibkr_errors.append(payload)
             if len(self.state.ibkr_errors) > 200:
                 self.state.ibkr_errors = self.state.ibkr_errors[-200:]
+
+        if errorCode not in IBKR_INFO_CODES and self.state.get_historical_done_event(reqId) is not None:
+            self.state.complete_historical_request(reqId, error=f"{errorCode}: {errorString}")
 
         if self.error_handler is not None:
             self.error_handler(payload)
@@ -196,3 +236,22 @@ class MarketDataWrapper(EWrapper):
             return
         with self.state.lock:
             self.state.scanner_symbols[symbol] = con_id
+
+    def historicalData(self, reqId: int, bar: Any) -> None:  # noqa: N802
+        self.state.append_historical_bar(
+            reqId,
+            {
+                "date": getattr(bar, "date", None),
+                "open": getattr(bar, "open", 0.0),
+                "high": getattr(bar, "high", 0.0),
+                "low": getattr(bar, "low", 0.0),
+                "close": getattr(bar, "close", 0.0),
+                "volume": getattr(bar, "volume", 0.0),
+                "wap": getattr(bar, "wap", 0.0),
+                "bar_count": getattr(bar, "barCount", 0),
+            },
+        )
+
+    def historicalDataEnd(self, reqId: int, start: str, end: str) -> None:  # noqa: N802
+        _ = (start, end)
+        self.state.complete_historical_request(reqId)

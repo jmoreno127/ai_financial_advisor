@@ -71,3 +71,28 @@ CREATE TABLE IF NOT EXISTS ai_followup_turns (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (conversation_id, turn_index)
 );
+
+CREATE TABLE IF NOT EXISTS instrument_historical_bars (
+    id BIGSERIAL PRIMARY KEY,
+    instrument_key TEXT NOT NULL,
+    bar_ts TIMESTAMPTZ NOT NULL,
+    open DOUBLE PRECISION NOT NULL,
+    high DOUBLE PRECISION NOT NULL,
+    low DOUBLE PRECISION NOT NULL,
+    close DOUBLE PRECISION NOT NULL,
+    volume DOUBLE PRECISION NOT NULL,
+    wap DOUBLE PRECISION NOT NULL,
+    bar_count INTEGER NOT NULL,
+    bar_size TEXT NOT NULL,
+    what_to_show TEXT NOT NULL,
+    use_rth BOOLEAN NOT NULL,
+    source TEXT NOT NULL,
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (instrument_key, bar_ts, bar_size, what_to_show, use_rth)
+);
+
+CREATE INDEX IF NOT EXISTS idx_instrument_historical_bars_key_ts
+    ON instrument_historical_bars (instrument_key, bar_ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_instrument_historical_bars_fetched_at
+    ON instrument_historical_bars (fetched_at);
