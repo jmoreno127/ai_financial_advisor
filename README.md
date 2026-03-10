@@ -45,6 +45,10 @@ Examples:
 - `advisor chat`: follow-up conversation using latest stored recommendation context
   - Single turn: `advisor chat --question "Should I add Gold exposure?"`
   - Interactive: `advisor chat`
+- `advisor backtest --config configs/trading_mvp.yaml`: run systematic futures backtests (ORB + VWAP variants)
+- `advisor validate --config configs/trading_mvp.yaml`: run walk-forward OOS validation and persist best variant
+- `advisor paper-run --config configs/trading_mvp.yaml`: run local paper-trading loop (auto-orders only after validation pass)
+- `advisor kill-switch --config configs/trading_mvp.yaml --on|--off`: set DB kill switch for new paper entries
 
 Follow-up turns are persisted in PostgreSQL table `ai_followup_turns`.
 IBKR historical bars used by follow-up are cached in `instrument_historical_bars` and pruned by `HIST_CACHE_RETENTION_DAYS`.

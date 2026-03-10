@@ -1,0 +1,45 @@
+account:
+  starting_equity: 57000
+  risk_profile: conservative
+
+execution:
+  entry_order_type: STOP_MARKET
+  slippage_ticks: 1
+  commission_per_side: 0.85
+  same_bar_resolution: pessimistic
+  force_flat_time: "16:55:00"
+
+universe:
+  watchlist:
+    - MGC:202604:COMEX
+    - MNQ:202606:CME
+    - MES:202606:CME
+    - SI:202605:COMEX
+  primary_bar_size: "5 mins"
+  session_scope: [RTH, ETH]
+  backtest_months: 12
+
+strategies:
+  orb:
+    enabled: true
+    opening_range_minutes: [15, 30]
+    min_range_points: 2.0
+    max_range_points: 50.0
+    target_r_multiple: 1.5
+    one_trade_per_day: true
+  vwap_pullback:
+    enabled: true
+    pullback_band_atr_mult: 0.35
+    target_r_multiple: 1.4
+
+validation:
+  min_oos_profit_factor: 1.2
+  max_oos_drawdown: 0.08
+  min_oos_trades: 100
+  min_oos_expectancy: 0.0
+  walk_forward_windows: 4
+
+runtime:
+  poll_seconds: 60
+  output_dir: outputs
+  state_file: outputs/state/paper_state.json
