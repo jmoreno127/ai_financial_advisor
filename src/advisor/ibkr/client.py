@@ -13,9 +13,11 @@ from advisor.models import HistoricalBar, InstrumentSnapshot, PortfolioSnapshot,
 try:
     from ibapi.client import EClient
     from ibapi.contract import Contract
+    from ibapi.order import Order
 except Exception:  # pragma: no cover - optional dependency import guard
     EClient = None  # type: ignore[assignment]
     Contract = None  # type: ignore[assignment]
+    Order = None  # type: ignore[assignment]
 
 
 class IBKRClient:
@@ -205,6 +207,10 @@ class IBKRClient:
         snapshot = self.state.snapshot()
         return list(snapshot["scanner_symbols"].keys())[: self.config.scanner_max_results]
 
+    def order_events(self) -> List[Dict[str, Any]]:
+        snapshot = self.state.snapshot()
+        return list(snapshot.get("order_events", []))
+
     def collect_snapshot(self, cycle_ts: datetime) -> Tuple[PortfolioSnapshot, List[InstrumentSnapshot]]:
         snapshot = self.state.snapshot()
         account_values: Dict[str, float] = snapshot["account_values"]
@@ -285,6 +291,7 @@ class IBKRClient:
         what_to_show: str,
         use_rth: bool,
         timeout_seconds: int,
+        end_datetime: datetime | None = None,
     ) -> List[HistoricalBar]:
         if self.client is None:
             raise RuntimeError("ibapi is not installed. Install dependencies with `pip install -e .`.")
@@ -310,10 +317,13 @@ class IBKRClient:
         )
 
         try:
+            end_dt = ""
+            if end_datetime is not None:
+                end_dt = end_datetime.astimezone(timezone.utc).strftime("%Y%m%d-%H:%M:%S")
             self.client.reqHistoricalData(
                 req_id,
                 contract,
-                "",
+                end_dt,
                 duration,
                 bar_size,
                 what_to_show,
@@ -363,9 +373,56 @@ class IBKRClient:
             )
         return results
 
+    def place_order(
+        self,
+        *,
+        instrument_entry: str,
+        action: str,
+        quantity: int,
+        order_type: str = "MKT",
+        aux_price: float | None = None,
+        lmt_price: float | None = None,
+        tif: str = "DAY",
+        transmit: bool = True,
+    ) -> int:
+        if self.client is None:
+            raise RuntimeError("ibapi is not installed. Install dependencies with `pip install -e .`.")
+        if not self.is_connected():
+            raise RuntimeError("IBKR is not connected")
+        if Contract is None or Order is None:
+            raise RuntimeError("ibapi contract/order types unavailable")
+
+        _, contract = _contract_from_watchlist_entry(instrument_entry)
+        if contract is None:
+            raise ValueError(f"Unsupported instrument format: {instrument_entry}")
+
+        order = Order()
+        order.action = action.upper()
+        order.totalQuantity = int(quantity)
+        order.orderType = order_type.upper()
+        order.tif = tif
+        order.transmit = bool(transmit)
+        if aux_price is not None:
+            order.auxPrice = float(aux_price)
+        if lmt_price is not None:
+            order.lmtPrice = float(lmt_price)
+
+        order_id = self._next_order_id()
+        self.client.placeOrder(order_id, contract, order)
+        return order_id
+
     def _next_request_id(self) -> int:
         self._next_req_id += 1
         return self._next_req_id
+
+    def _next_order_id(self) -> int:
+        with self.state.lock:
+            next_valid = self.state.next_valid_order_id
+            if next_valid is None:
+                self._next_req_id += 1
+                return self._next_req_id
+            self.state.next_valid_order_id = next_valid + 1
+            return next_valid
 
 
 def _stock_contract(symbol: str):

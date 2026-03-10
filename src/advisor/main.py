@@ -23,6 +23,13 @@ from advisor.ibkr.client import IBKRClient
 from advisor.models import AnalysisRequest, DecisionRecord
 from advisor.output.logger import StructuredLogger
 from advisor.storage.postgres import PostgresStore
+from advisor.trading import (
+    load_runtime_context,
+    run_backtest,
+    run_paper,
+    run_validation,
+    set_paper_kill_switch,
+)
 
 
 class AdvisorService:
@@ -469,6 +476,17 @@ def main() -> None:
     sub.add_parser("doctor")
     chat_parser = sub.add_parser("chat")
     chat_parser.add_argument("--question", type=str, default=None, help="Single follow-up question")
+    backtest_parser = sub.add_parser("backtest")
+    backtest_parser.add_argument("--config", type=str, required=True, help="Path to trading YAML config")
+    validate_parser = sub.add_parser("validate")
+    validate_parser.add_argument("--config", type=str, required=True, help="Path to trading YAML config")
+    paper_parser = sub.add_parser("paper-run")
+    paper_parser.add_argument("--config", type=str, required=True, help="Path to trading YAML config")
+    kill_parser = sub.add_parser("kill-switch")
+    kill_parser.add_argument("--config", type=str, required=True, help="Path to trading YAML config")
+    kill_group = kill_parser.add_mutually_exclusive_group(required=True)
+    kill_group.add_argument("--on", action="store_true")
+    kill_group.add_argument("--off", action="store_true")
 
     args = parser.parse_args()
     config = AppConfig.from_env()
@@ -477,6 +495,26 @@ def main() -> None:
         raise SystemExit(doctor_command(config))
     if args.command == "chat":
         raise SystemExit(chat_command(config, args.question))
+    if args.command == "backtest":
+        ctx = load_runtime_context(config, args.config)
+        result = run_backtest(ctx)
+        print(result)
+        raise SystemExit(0)
+    if args.command == "validate":
+        ctx = load_runtime_context(config, args.config)
+        result = run_validation(ctx)
+        print(result)
+        raise SystemExit(0)
+    if args.command == "paper-run":
+        ctx = load_runtime_context(config, args.config)
+        run_paper(ctx)
+        raise SystemExit(0)
+    if args.command == "kill-switch":
+        ctx = load_runtime_context(config, args.config)
+        enabled = bool(args.on and not args.off)
+        result = set_paper_kill_switch(ctx, enabled)
+        print(result)
+        raise SystemExit(0)
 
     service = AdvisorService(config)
     if args.command == "once":

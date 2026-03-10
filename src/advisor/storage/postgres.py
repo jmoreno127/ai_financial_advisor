@@ -431,6 +431,68 @@ class PostgresStore:
             result = conn.execute(stmt, {"cutoff_ts": cutoff_ts})
             return int(result.rowcount or 0)
 
+    def set_trading_kill_switch(self, enabled: bool) -> None:
+        self.init_schema()
+        payload = json.dumps({"enabled": bool(enabled)}, default=str)
+        payload_sql = "CAST(:payload AS JSONB)" if self.engine.dialect.name.startswith("postgresql") else ":payload"
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"""
+                    INSERT INTO trading_controls (control_key, payload, updated_at)
+                    VALUES (:control_key, {payload_sql}, CURRENT_TIMESTAMP)
+                    ON CONFLICT (control_key)
+                    DO UPDATE SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+                    """
+                ),
+                {"control_key": "kill_switch", "payload": payload},
+            )
+
+    def get_trading_kill_switch(self) -> bool:
+        self.init_schema()
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT payload
+                    FROM trading_controls
+                    WHERE control_key = :control_key
+                    """
+                ),
+                {"control_key": "kill_switch"},
+            ).mappings().first()
+            if row is None:
+                return False
+            payload = _json_like(row["payload"])
+            if isinstance(payload, dict):
+                return bool(payload.get("enabled"))
+            return False
+
+    def write_trading_event(
+        self,
+        event_type: str,
+        symbol: str | None,
+        strategy: str | None,
+        payload: Dict[str, Any] | None = None,
+    ) -> None:
+        self.init_schema()
+        payload_sql = "CAST(:payload AS JSONB)" if self.engine.dialect.name.startswith("postgresql") else ":payload"
+        with self.engine.begin() as conn:
+            conn.execute(
+                text(
+                    f"""
+                    INSERT INTO trading_events (event_type, symbol, strategy, payload)
+                    VALUES (:event_type, :symbol, :strategy, {payload_sql})
+                    """
+                ),
+                {
+                    "event_type": event_type,
+                    "symbol": symbol,
+                    "strategy": strategy,
+                    "payload": json.dumps(payload or {}, default=str),
+                },
+            )
+
 
 def _json_like(value: Any) -> Any:
     if isinstance(value, str):

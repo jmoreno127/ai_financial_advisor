@@ -96,3 +96,21 @@ CREATE INDEX IF NOT EXISTS idx_instrument_historical_bars_key_ts
 
 CREATE INDEX IF NOT EXISTS idx_instrument_historical_bars_fetched_at
     ON instrument_historical_bars (fetched_at);
+
+CREATE TABLE IF NOT EXISTS trading_controls (
+    control_key TEXT PRIMARY KEY,
+    payload JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS trading_events (
+    id BIGSERIAL PRIMARY KEY,
+    event_ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    event_type TEXT NOT NULL,
+    symbol TEXT,
+    strategy TEXT,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_trading_events_ts ON trading_events (event_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_trading_events_type ON trading_events (event_type);

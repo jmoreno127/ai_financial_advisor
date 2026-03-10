@@ -35,6 +35,7 @@ class IBKRState:
     historical_done_by_req_id: Dict[int, threading.Event] = field(default_factory=dict)
     historical_meta_by_req_id: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     next_valid_order_id: Optional[int] = None
+    order_events: List[Dict[str, Any]] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def register_ticker(self, symbol: str, ticker_id: int) -> None:
@@ -52,6 +53,7 @@ class IBKRState:
                 "ticker_to_symbol": dict(self.ticker_to_symbol),
                 "scanner_symbols": dict(self.scanner_symbols),
                 "ibkr_errors": list(self.ibkr_errors),
+                "order_events": list(self.order_events),
             }
 
     def start_historical_request(self, req_id: int, meta: Dict[str, Any]) -> threading.Event:
@@ -261,3 +263,67 @@ class MarketDataWrapper(EWrapper):
     def historicalDataEnd(self, reqId: int, start: str, end: str) -> None:  # noqa: N802
         _ = (start, end)
         self.state.complete_historical_request(reqId)
+
+    def openOrder(self, orderId: int, contract: Any, order: Any, orderState: Any) -> None:  # noqa: N802
+        with self.state.lock:
+            self.state.order_events.append(
+                {
+                    "event": "openOrder",
+                    "order_id": orderId,
+                    "symbol": getattr(contract, "symbol", ""),
+                    "status": getattr(orderState, "status", ""),
+                    "action": getattr(order, "action", ""),
+                    "order_type": getattr(order, "orderType", ""),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            if len(self.state.order_events) > 1000:
+                self.state.order_events = self.state.order_events[-1000:]
+
+    def orderStatus(  # noqa: N802
+        self,
+        orderId: int,
+        status: str,
+        filled: float,
+        remaining: float,
+        avgFillPrice: float,
+        permId: int,
+        parentId: int,
+        lastFillPrice: float,
+        clientId: int,
+        whyHeld: str,
+        mktCapPrice: float,
+    ) -> None:
+        _ = (permId, parentId, clientId, whyHeld, mktCapPrice)
+        with self.state.lock:
+            self.state.order_events.append(
+                {
+                    "event": "orderStatus",
+                    "order_id": orderId,
+                    "status": status,
+                    "filled": filled,
+                    "remaining": remaining,
+                    "avg_fill_price": avgFillPrice,
+                    "last_fill_price": lastFillPrice,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            if len(self.state.order_events) > 1000:
+                self.state.order_events = self.state.order_events[-1000:]
+
+    def execDetails(self, reqId: int, contract: Any, execution: Any) -> None:  # noqa: N802
+        _ = reqId
+        with self.state.lock:
+            self.state.order_events.append(
+                {
+                    "event": "execDetails",
+                    "order_id": getattr(execution, "orderId", None),
+                    "symbol": getattr(contract, "symbol", ""),
+                    "side": getattr(execution, "side", ""),
+                    "shares": getattr(execution, "shares", 0.0),
+                    "price": getattr(execution, "price", 0.0),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            if len(self.state.order_events) > 1000:
+                self.state.order_events = self.state.order_events[-1000:]
