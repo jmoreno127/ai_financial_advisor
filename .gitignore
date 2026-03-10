@@ -12,3 +12,6 @@ dist/
 logs/
 *.db
 .DS_Store
+
+
+outputs/reports/
