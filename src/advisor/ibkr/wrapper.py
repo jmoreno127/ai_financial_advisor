@@ -19,7 +19,8 @@ PREV_CLOSE_TICK = 9
 VOLUME_TICK = 8
 IBKR_INFO_CODES = {2104, 2106, 2107, 2108, 2158, 365}
 IBKR_WARNING_CODES = {2103, 2105, 2109, 2110}
-IBKR_NON_FATAL_HISTORICAL_CODES = {2174, 2176}
+# 2174/2176 = pacing or "no data" from Historical Data Service; complete request so caller gets error instead of timeout
+IBKR_NON_FATAL_HISTORICAL_CODES: set[int] = set()
 
 
 @dataclass

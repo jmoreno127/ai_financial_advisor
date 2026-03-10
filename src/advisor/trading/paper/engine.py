@@ -36,9 +36,16 @@ class PaperRuntime:
     def run(self) -> None:
         managed_client: IBKRClient | None = None
         if self.broker is None:
+            def _ibkr_error_handler(payload: dict) -> None:
+                self.logger.error(
+                    "IBKR error",
+                    error_code=payload.get("error_code"),
+                    error_string=payload.get("error_string"),
+                )
+
             ibkr_client = IBKRClient(
                 self.app_config,
-                error_handler=lambda payload: self.logger.error("IBKR error", **payload),
+                error_handler=_ibkr_error_handler,
             )
             ibkr_client.start(subscribe_core=False, subscribe_watchlist=False)
             self.broker = IBKRPaperBrokerAdapter(ibkr_client)
