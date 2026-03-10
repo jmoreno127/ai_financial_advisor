@@ -24,15 +24,19 @@ def pull_chunked_history(
         bars: List[HistoricalBar] = []
         end_time = datetime.now(timezone.utc)
         for _ in range(max(1, months)):
-            chunk = ibkr.fetch_historical_bars(
-                symbol,
-                duration="1 M",
-                bar_size=bar_size,
-                what_to_show=what_to_show,
-                use_rth=use_rth,
-                timeout_seconds=timeout_seconds,
-                end_datetime=end_time,
-            )
+            try:
+                chunk = ibkr.fetch_historical_bars(
+                    symbol,
+                    duration="1 M",
+                    bar_size=bar_size,
+                    what_to_show=what_to_show,
+                    use_rth=use_rth,
+                    timeout_seconds=timeout_seconds,
+                    end_datetime=end_time,
+                )
+            except Exception:
+                # Keep partial history gathered so far and continue with other symbols.
+                break
             if not chunk:
                 break
             bars.extend(chunk)

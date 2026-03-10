@@ -18,7 +18,7 @@ LAST_PRICE_TICK = 4
 PREV_CLOSE_TICK = 9
 VOLUME_TICK = 8
 IBKR_INFO_CODES = {2104, 2106, 2107, 2108, 2158, 365}
-IBKR_WARNING_CODES = {2103, 2105, 2109, 2110}
+IBKR_WARNING_CODES = {2103, 2105, 2109, 2110, 366}
 # 2174/2176 = pacing or "no data" from Historical Data Service; complete request so caller gets error instead of timeout
 IBKR_NON_FATAL_HISTORICAL_CODES: set[int] = set()
 
@@ -131,6 +131,10 @@ class MarketDataWrapper(EWrapper):
             self.state.ibkr_errors.append(payload)
             if len(self.state.ibkr_errors) > 200:
                 self.state.ibkr_errors = self.state.ibkr_errors[-200:]
+
+        # 366 often arrives after cancelHistoricalData and is not actionable for strategy/backtest flow.
+        if errorCode == 366 and self.state.get_historical_done_event(reqId) is not None:
+            self.state.complete_historical_request(reqId)
 
         should_complete_historical = (
             errorCode not in IBKR_INFO_CODES

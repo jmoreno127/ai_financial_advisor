@@ -67,3 +67,15 @@ def test_global_error_completes_in_flight_historical_request() -> None:
     _, meta = state.consume_historical_request(1001)
     assert "504" in meta.get("error", "")
     assert "Not connected" in meta.get("error", "")
+
+
+def test_cancel_race_366_completes_without_error() -> None:
+    state = IBKRState()
+    wrapper = MarketDataWrapper(state)
+    event = state.start_historical_request(2001, {"instrument_key": "MGC-202604-COMEX"})
+
+    wrapper.error(2001, 366, "No historical data query found for ticker id:2001")
+
+    assert event.is_set() is True
+    _, meta = state.consume_historical_request(2001)
+    assert "error" not in meta

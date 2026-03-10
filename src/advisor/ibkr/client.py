@@ -316,10 +316,11 @@ class IBKRClient:
             },
         )
 
+        completed = False
         try:
             end_dt = ""
             if end_datetime is not None:
-                end_dt = end_datetime.astimezone(timezone.utc).strftime("%Y%m%d-%H:%M:%S")
+                end_dt = end_datetime.astimezone(timezone.utc).strftime("%Y%m%d-%H:%M:%S UTC")
             self.client.reqHistoricalData(
                 req_id,
                 contract,
@@ -337,10 +338,11 @@ class IBKRClient:
                 self.state.complete_historical_request(req_id, error="timeout")
                 raise TimeoutError(f"Historical data timeout for {instrument_key}")
         finally:
-            try:
-                self.client.cancelHistoricalData(req_id)
-            except Exception:
-                pass
+            if not completed:
+                try:
+                    self.client.cancelHistoricalData(req_id)
+                except Exception:
+                    pass
 
         bars_raw, meta = self.state.consume_historical_request(req_id)
         error = meta.get("error")
