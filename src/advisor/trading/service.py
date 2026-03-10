@@ -140,11 +140,12 @@ def set_paper_kill_switch(ctx: TradingRuntimeContext, enabled: bool) -> dict:
 
 def _load_market_data(ctx: TradingRuntimeContext) -> Dict[str, pd.DataFrame]:
     def _ibkr_error_handler(payload: dict) -> None:
-        # StructuredLogger.error(message: str, **payload) – include code and string as fields
+        code = payload.get("error_code", "")
+        msg = payload.get("error_string", "")
         ctx.logger.error(
-            "IBKR error",
-            error_code=payload.get("error_code"),
-            error_string=payload.get("error_string"),
+            f"IBKR error: {code} - {msg}",
+            error_code=code,
+            error_string=msg,
         )
 
     client = IBKRClient(ctx.app_config, error_handler=_ibkr_error_handler)

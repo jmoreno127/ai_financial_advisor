@@ -84,6 +84,10 @@ class IBKRState:
         with self.lock:
             return self.historical_done_by_req_id.get(req_id)
 
+    def get_active_historical_req_ids(self) -> List[int]:
+        with self.lock:
+            return list(self.historical_done_by_req_id.keys())
+
     def consume_historical_request(self, req_id: int) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
         with self.lock:
             bars = self.historical_bars_by_req_id.pop(req_id, [])
@@ -133,8 +137,13 @@ class MarketDataWrapper(EWrapper):
             and errorCode not in IBKR_WARNING_CODES
             and errorCode not in IBKR_NON_FATAL_HISTORICAL_CODES
         )
-        if should_complete_historical and self.state.get_historical_done_event(reqId) is not None:
-            self.state.complete_historical_request(reqId, error=f"{errorCode}: {errorString}")
+        if should_complete_historical:
+            if self.state.get_historical_done_event(reqId) is not None:
+                self.state.complete_historical_request(reqId, error=f"{errorCode}: {errorString}")
+            else:
+                # IBKR sometimes sends fatal errors with reqId=-1 or 0; complete any in-flight historical request so we don't hang
+                for rid in self.state.get_active_historical_req_ids():
+                    self.state.complete_historical_request(rid, error=f"{errorCode}: {errorString}")
 
         if self.error_handler is not None:
             self.error_handler(payload)

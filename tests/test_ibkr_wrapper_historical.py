@@ -42,11 +42,28 @@ def test_historical_error_marks_request_done() -> None:
     assert "162" in meta.get("error", "")
 
 
-def test_non_fatal_historical_warning_does_not_complete_request() -> None:
+def test_historical_pacing_or_warning_completes_request_with_error() -> None:
+    """2174/pacing-style errors now complete the request so caller gets error instead of timeout."""
     state = IBKRState()
     wrapper = MarketDataWrapper(state)
     event = state.start_historical_request(9001, {"instrument_key": "MES-202603-CME"})
 
     wrapper.error(9001, 2174, "Warning: You submitted request with date-time without time zone")
 
-    assert event.is_set() is False
+    assert event.is_set() is True
+    _, meta = state.consume_historical_request(9001)
+    assert "2174" in meta.get("error", "")
+
+
+def test_global_error_completes_in_flight_historical_request() -> None:
+    """When IBKR sends a fatal error with reqId=-1, we still complete any in-flight historical request."""
+    state = IBKRState()
+    wrapper = MarketDataWrapper(state)
+    event = state.start_historical_request(1001, {"instrument_key": "MGC-202604-COMEX"})
+
+    wrapper.error(-1, 504, "Not connected")
+
+    assert event.is_set() is True
+    _, meta = state.consume_historical_request(1001)
+    assert "504" in meta.get("error", "")
+    assert "Not connected" in meta.get("error", "")
